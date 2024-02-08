@@ -164,7 +164,7 @@ impl State {
         });
 
         // surface is what the gpu draws to
-        let surface = instance.create_surface(window.clone()).unwrap();
+        let surface = instance.create_surface(window.clone()).expect("cant create surface");
 
         // adapter is the interface to the GPU
         let adapter = instance.request_adapter(
@@ -173,7 +173,7 @@ impl State {
                 compatible_surface: Some(&surface), // must be compatible with our surface
                 force_fallback_adapter: false,
             },
-        ).await.unwrap();
+        ).await.expect("cant create adapter");
 
         let (device, queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -186,7 +186,7 @@ impl State {
                 label: None,
             },
             None,
-        ).await.unwrap();
+        ).await.expect("cant create device");
 
         let surface_caps = surface.get_capabilities(&adapter);
 
@@ -467,8 +467,8 @@ impl State {
                 timestamp_writes: None,
             });
 
-            let rustiscool_tex = &self.resource_manager.get_texture(&String::from("rustiscool.png")).unwrap();
-            let model = &self.resource_manager.get_model(&String::from("cube.obj")).unwrap();
+            let rustiscool_tex = &self.resource_manager.get_texture(&String::from("rustiscool.png")).expect("cant get tex");
+            let model = &self.resource_manager.get_model(&String::from("cube.obj")).expect("cant get model");
 
             render_pass.set_pipeline(&self.render_pipeline);
 
@@ -490,8 +490,8 @@ impl State {
 
 pub async fn run() {
     env_logger::init();
-    let event_loop = EventLoop::new().unwrap();
-    let window = Arc::new(WindowBuilder::new().build(&event_loop).unwrap());
+    let event_loop = EventLoop::new().expect("cant create eventloop");
+    let window = Arc::new(WindowBuilder::new().build(&event_loop).expect("cant create window"));
 
     let mut state = State::new(window).await;
 
