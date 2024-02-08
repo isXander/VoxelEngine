@@ -1,21 +1,24 @@
 mod texture;
+mod model;
+mod resources;
 
 use std::mem;
 use std::ops::AddAssign;
 use std::path::Path;
 use std::sync::Arc;
-use cgmath::{Deg, Euler, InnerSpace, Matrix4, perspective, Point3, Quaternion, Rad, Vector3, Zero};
+use cgmath::{Deg, InnerSpace, Matrix4, perspective, Point3, Quaternion, Vector3, Zero};
 use cgmath::prelude::*;
-use image::GenericImageView;
 use wgpu::PresentMode;
 use wgpu::util::DeviceExt;
-use winit::{event::*, event_loop::{ControlFlow, EventLoop}, keyboard, window::WindowBuilder};
+use winit::{event::*, event_loop::EventLoop, window::WindowBuilder};
 use winit::event_loop::EventLoopWindowTarget;
-use winit::keyboard::Key::{Character, Named};
-use winit::keyboard::{NamedKey, SmolStr, Key, KeyCode};
+use winit::keyboard::Key::Named;
+use winit::keyboard::{NamedKey, KeyCode};
 use winit::keyboard::PhysicalKey::Code;
 use winit::window::Window;
-use crate::texture::TextureManager;
+use crate::model::{DrawModel, ModelVertex, Vertex};
+use crate::resources::ResourceManager;
+use crate::texture::{Texture};
 
 const NUM_INSTANCES_PER_ROW: u32 = 10;
 const INSTANCE_DISPLACEMENT: Vector3<f32> = Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
@@ -56,7 +59,7 @@ impl Camera {
         // warps the scene to get the effect of depth
         let proj = perspective(Deg(self.fov_y), self.aspect, self.z_near, self.z_far);
 
-        return OPENGL_TO_WGPU_MATRIX * proj * view;
+        OPENGL_TO_WGPU_MATRIX * proj * view
     }
 
     fn offset_eye(&mut self, offset: &Vector3<f32>) {
@@ -83,11 +86,9 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     window: Arc<Window>,
+    depth_texture: Texture,
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
-    texture_manager: TextureManager,
+    resource_manager: ResourceManager,
     camera: Camera,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
@@ -95,14 +96,6 @@ struct State {
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
 }
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    tex_coords: [f32; 2],
-}
-
 struct Instance {
     position: Vector3<f32>,
     rotation: Quaternion<f32>,
@@ -124,8 +117,6 @@ impl Instance {
 
 impl InstanceRaw {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
-        use std::mem;
-
         wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
@@ -154,15 +145,6 @@ impl InstanceRaw {
         }
     }
 }
-
-const VERTICES: &[Vertex] = &[
-    // Changed
-    Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.00759614], }, // A
-    Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.43041354], }, // B
-    Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.949397], }, // C
-    Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.84732914], }, // D
-    Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.2652641], }, // E
-];
 
 // as to not duplicate certain vertices, define a unique set above, and describe it's layout below
 const INDICES: &[u16] = &[
@@ -211,8 +193,7 @@ impl State {
         // gets how the draw surface will be formatted (duh)
         let surface_format = surface_caps.formats.iter()
             .copied()
-            .filter(|f| f.is_srgb()) // find a format that is sRGB
-            .next()
+            .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]); // if not found, go with the first format, could break shaders
         // configures the surface, we tell it what it's for, it's width etc. all the gpu needs to know to draw to it
         let config = wgpu::SurfaceConfiguration {
@@ -222,8 +203,7 @@ impl State {
             height: size.height,
             present_mode: surface_caps.present_modes.iter() // determines how to 'present' the surface to the display, e.g. vsync
                 .copied()
-                .filter(|f| f == &PresentMode::AutoVsync)
-                .next()
+                .find(|f| f == &PresentMode::AutoVsync)
                 .unwrap_or(PresentMode::Fifo), // fifo supported on all
             desired_maximum_frame_latency: 2,
             alpha_mode: surface_caps.alpha_modes[0],
@@ -232,8 +212,7 @@ impl State {
         // apply the configuration
         surface.configure(&device, &config);
 
-        let diffuse_bytes = include_bytes!("rustiscool.png");
-        let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy_tree.png").unwrap();
+        let depth_texture = Texture::create_depth_texture(&device, &config, "depth texture");
 
         // bind group describes a set of resources and how they can be accessed by shader
         let texture_bind_group_layout =
@@ -260,25 +239,9 @@ impl State {
                     ],
                     label: Some("texture_bind_group_layout")
                 });
-        let diffuse_bind_group = device.create_bind_group(
-            &wgpu::BindGroupDescriptor {
-                layout: &texture_bind_group_layout,
-                entries: &[ // filling in the data described by the layout
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
-                    }
-                ],
-                label: Some("diffuse_bind_group")
-            }
-        );
 
-        let texture_manager = TextureManager::new(
-            Path::new("./src"),
+        let resource_manager = ResourceManager::new(
+            Path::new("./res"),
             &device,
             &queue,
             &texture_bind_group_layout,
@@ -287,9 +250,9 @@ impl State {
         let camera = Camera {
             // position the camera 1 unit up and 2 units back
             // +z is out of the screen
-            eye: (0.0, 1.0, 2.0).into(),
+            eye: (0.0, 2.0, 2.0).into(),
             // have it look at the origin
-            target: (0.0, 0.0, 0.0).into(),
+            target: (0.0, 1.0, 0.0).into(),
             // which way is up
             up: Vector3::unit_y(),
             aspect: config.width as f32 / config.height as f32,
@@ -359,7 +322,7 @@ impl State {
                 module: &shader,
                 entry_point: "vs_main", // must specify the entrypoint
                 buffers: &[
-                    Vertex::desc(), InstanceRaw::desc(),
+                    ModelVertex::desc(), InstanceRaw::desc(),
                 ], // tells wgpu what type of vertices we want to pass to the shader
             },
             fragment: Some(wgpu::FragmentState { // technically optional
@@ -380,7 +343,13 @@ impl State {
                 unclipped_depth: false,
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less, // less means front to back
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState {
                 count: 1, // how many samples the pipeline will use
                 mask: !0, // specifies which samples we are using
@@ -389,27 +358,9 @@ impl State {
             multiview: None,
         });
 
-        let vertex_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(VERTICES),
-                usage: wgpu::BufferUsages::VERTEX,
-            }
-        );
-
-        let index_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(INDICES),
-                usage: wgpu::BufferUsages::INDEX,
-            }
-        );
-
-        let num_indices = INDICES.len() as u32;
-
         let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
             (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                let position = Vector3 { x: x as f32, y: 0.0, z: z as f32 };
+                let position = Vector3 { x: (x as f32) * 3.0, y: 0.0, z: (z as f32) * 3.0 } - INSTANCE_DISPLACEMENT;
 
                 let rotation = if position.is_zero() {
                     Quaternion::from_axis_angle(Vector3::unit_z(), Deg(0.0))
@@ -432,26 +383,23 @@ impl State {
             }
         );
 
-        return Self {
+        Self {
             surface,
             device,
             queue,
             config,
             size,
             window,
+            depth_texture,
             render_pipeline,
-            vertex_buffer,
-            index_buffer,
-            num_indices,
-            texture_manager,
+            resource_manager,
             camera,
             camera_uniform,
             camera_buffer,
             camera_bind_group,
             instances,
             instance_buffer,
-        };
-
+        }
     }
 
     pub fn window(&self) -> &Window {
@@ -464,6 +412,7 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+            self.depth_texture = Texture::create_depth_texture(&self.device, &self.config, "depth")
         }
     }
 
@@ -506,29 +455,29 @@ impl State {
                         store: wgpu::StoreOp::Store,
                     }
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
 
-            let rustiscool_tex = &self.texture_manager.get_texture(&String::from("rustiscool.png")).unwrap();
-            let rustisbad_tex = &self.texture_manager.get_texture(&String::from("rustisbad.png")).unwrap();
+            let rustiscool_tex = &self.resource_manager.get_texture(&String::from("rustiscool.png")).unwrap();
+            let model = &self.resource_manager.get_model(&String::from("cube.obj")).unwrap();
 
             render_pass.set_pipeline(&self.render_pipeline);
 
             render_pass.set_bind_group(0, &rustiscool_tex.bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
 
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..)); // .. specifies entire buffer
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1 as _);
-
-            // use the second texture to draw the rest of the instances
-            render_pass.set_bind_group(0, &rustisbad_tex.bind_group, &[]);
-            render_pass.draw_indexed(0..self.num_indices, 0, 1..(INDICES.len() - 1) as _)
+            render_pass.draw_model_instanced(&model, 0..self.instances.len() as u32)
         } // extra block tells borrower to drop any borrows, begin_render_pass borrows encoder, so to finish, we need to drop it
 
         // finish the command buffer and SEND
@@ -536,27 +485,6 @@ impl State {
         output.present();
 
         Ok(())
-    }
-}
-
-impl Vertex {
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x2,
-                }
-            ]
-        }
     }
 }
 
@@ -570,7 +498,7 @@ pub async fn run() {
     event_loop.run(move |event, event_loop_window_target| {
         match event {
             Event::WindowEvent { ref event, window_id }
-                if window_id == state.window().id() => window_event(&mut state, &event, event_loop_window_target),
+                if window_id == state.window().id() => window_event(&mut state, event, event_loop_window_target),
             Event::NewEvents(_) => {
                 state.window().request_redraw();
             }

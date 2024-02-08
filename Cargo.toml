@@ -13,3 +13,9 @@ bytemuck = { version = "1.14", features = [ "derive" ] }
 image = "0.24"
 anyhow = "1.0"
 cgmath = "0.18"
+tobj = { version = "4.0", features = [ "async" ] }
+
+[build-dependencies]
+anyhow = "1.0"
+fs_extra = "1.2"
+glob = "0.3"

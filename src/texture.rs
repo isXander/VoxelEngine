@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
 use image::GenericImageView;
 use anyhow::*;
 
@@ -11,6 +8,8 @@ pub struct Texture {
 }
 
 impl Texture {
+    pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
     pub fn from_bytes(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -88,77 +87,47 @@ impl Texture {
 
         Ok(Self { texture, view, sampler })
     }
-}
 
-pub struct TextureManager {
-    textures: HashMap<String, RegisteredTexture>
+    pub fn create_depth_texture(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, label: &str) -> Self {
+        let size = wgpu::Extent3d { // depth texture must be same size as screen
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        };
+        let desc = wgpu::TextureDescriptor {
+            label: Some(label),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        };
+        let texture = device.create_texture(&desc);
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(
+            &wgpu::SamplerDescriptor { // we don't technically need a sampler
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                compare: Some(wgpu::CompareFunction::LessEqual),
+                lod_min_clamp: 0.0,
+                lod_max_clamp: 100.0,
+                ..Default::default()
+            }
+        );
+
+        Self { texture, view, sampler }
+    }
 }
 
 pub struct RegisteredTexture {
     pub texture: Texture,
     pub bind_group: wgpu::BindGroup,
-}
-
-impl TextureManager {
-    const VALID_FILE_PATHS: &'static [&'static str] = &["png", "webp"];
-
-    pub fn new(
-        directory: &Path,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        bind_group_layout: &wgpu::BindGroupLayout
-    ) -> Self {
-        let mut textures: HashMap<String, RegisteredTexture> = HashMap::new();
-
-        let paths = fs::read_dir(directory).unwrap();
-
-        for path in paths {
-            let file = path.unwrap().path();
-            let extension = file.extension().unwrap();
-
-            let is_file_texture = Self::VALID_FILE_PATHS.iter().any(|&ext| ext == extension);
-            if !is_file_texture {
-                continue;
-            }
-
-            let file_name = file.file_name().unwrap().to_str().unwrap();
-            let file_path_relative = file.strip_prefix(directory).unwrap();
-
-            let texture_data = fs::read(&file).unwrap();
-            let texture_data_arr = texture_data.as_slice();
-            let texture = Texture::from_bytes(device, queue, texture_data_arr, file_name).unwrap();
-
-            let bind_group = device.create_bind_group(
-                &wgpu::BindGroupDescriptor {
-                    layout: bind_group_layout,
-                    entries: &[ // filling in the data described by the layout
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&texture.view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&texture.sampler),
-                        }
-                    ],
-                    label: None
-                }
-            );
-
-            let registered = RegisteredTexture {
-                texture,
-                bind_group,
-            };
-
-            textures.insert(file_path_relative.to_str().unwrap().to_string(), registered);
-        }
-
-        Self {
-            textures
-        }
-    }
-
-    pub fn get_texture(&self, texture_name: &String) -> Option<&RegisteredTexture> {
-        self.textures.get(texture_name)
-    }
 }
