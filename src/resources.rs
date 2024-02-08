@@ -24,16 +24,16 @@ impl ResourceManager {
         let mut textures: HashMap<String, RegisteredTexture> = HashMap::new();
         let mut models: HashMap<String, Model> = HashMap::new();
 
-        let paths = fs::read_dir(directory).unwrap();
+        let paths = fs::read_dir(directory).expect("can't read dir");
 
         for path in paths {
-            let file = path.unwrap().path();
-            let extension = file.extension().unwrap();
+            let file = path.expect("cant get path").path();
+            let extension = file.extension().expect("cant get extension");
 
-            let file_name = file.file_name().unwrap().to_str().unwrap();
-            let file_path_relative = file.strip_prefix(directory).unwrap();
+            let file_name = file.file_name().expect("cant get file name").to_str().expect("cant get file name as string");
+            let file_path_relative = file.strip_prefix(directory).expect("cant strip prefix");
 
-            let file_data = fs::read(&file).unwrap();
+            let file_data = fs::read(&file).expect("cant read data");
             let file_data_arr = file_data.as_slice();
 
             if Self::TEXTURE_EXTENSIONS.iter().any(|&ext| ext == extension) {
