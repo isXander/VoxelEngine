@@ -76,7 +76,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let object_color = textureSample(t_diffuse, s_diffuse, in.tex_coords); // sets colour of frag to brown
 
     // without ambient lighting, shadows would be pitch black
-    let ambient_strength = 0.01;
+    let ambient_strength = 0.5;
     let ambient_color = light.color * ambient_strength;
 
     let light_dir = normalize(light.position - in.world_position);
