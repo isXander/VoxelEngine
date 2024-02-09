@@ -22,7 +22,7 @@ use crate::model::{DrawLight, DrawModel, ModelVertex, Vertex};
 use crate::resources::ResourceManager;
 use crate::texture::{Texture};
 
-const NUM_INSTANCES_PER_ROW: u32 = 10;
+const NUM_INSTANCES_PER_ROW: u32 = 1;
 const INSTANCE_DISPLACEMENT: Vector3<f32> = Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
 
 // The coordinate system in Wgpu is based on DirectX and Metal's coordinate systems.
@@ -237,7 +237,7 @@ impl State {
                 });
 
         let light_uniform = LightUniform {
-            position: [2.0, 2.0, 2.0],
+            position: [2.0, 10000.0, 2.0],
             _padding: 0,
             color: [1.0, 1.0, 1.0],
             _padding2: 0,
