@@ -1,22 +1,24 @@
 mod texture;
 mod model;
 mod resources;
+mod camera;
 
 use std::mem;
 use std::ops::AddAssign;
 use std::path::Path;
 use std::sync::Arc;
-use cgmath::{Deg, InnerSpace, Matrix4, perspective, Point3, Quaternion, Vector3, Zero};
+use cgmath::{Deg, InnerSpace, Matrix3, Matrix4, perspective, Point3, Quaternion, Vector3, Zero};
 use cgmath::prelude::*;
-use wgpu::PresentMode;
+use wgpu::{include_wgsl, PresentMode};
 use wgpu::util::DeviceExt;
 use winit::{event::*, event_loop::EventLoop, window::WindowBuilder};
 use winit::event_loop::EventLoopWindowTarget;
 use winit::keyboard::Key::Named;
 use winit::keyboard::{NamedKey, KeyCode};
 use winit::keyboard::PhysicalKey::Code;
-use winit::window::Window;
-use crate::model::{DrawModel, ModelVertex, Vertex};
+use winit::window::{CursorGrabMode, Window};
+use crate::camera::{Camera, CameraController, FreeFlyController, Projection};
+use crate::model::{DrawLight, DrawModel, ModelVertex, Vertex};
 use crate::resources::ResourceManager;
 use crate::texture::{Texture};
 
@@ -36,35 +38,11 @@ pub const OPENGL_TO_WGPU_MATRIX: Matrix4<f32> = Matrix4::new(
     0.0, 0.0, 0.0, 1.0,
 );
 
-struct Camera {
-    eye: Point3<f32>,
-    target: Point3<f32>,
-    up: Vector3<f32>,
-    aspect: f32,
-    fov_y: f32,
-    z_near: f32,
-    z_far: f32,
-}
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct CameraUniform {
+    // view_position: [f32; 4],
     view_proj: [[f32; 4]; 4],
-}
-
-impl Camera {
-    fn build_view_projection_matrix(&self) -> Matrix4<f32> {
-        // moves the world to be at the position and rotation of the camera
-        let view = Matrix4::look_at_rh(self.eye, self.target, self.up);
-        // warps the scene to get the effect of depth
-        let proj = perspective(Deg(self.fov_y), self.aspect, self.z_near, self.z_far);
-
-        OPENGL_TO_WGPU_MATRIX * proj * view
-    }
-
-    fn offset_eye(&mut self, offset: &Vector3<f32>) {
-        self.eye.add_assign(*offset);
-    }
 }
 
 impl CameraUniform {
@@ -74,8 +52,9 @@ impl CameraUniform {
         }
     }
 
-    fn update_view_proj(&mut self, camera: &Camera) {
-        self.view_proj = camera.build_view_projection_matrix().into();
+    fn update_view_proj(&mut self, camera: &Camera, projection: &Projection) {
+        // self.view_position = camera.position.to_homogeneous().truncate().into();
+        self.view_proj = (projection.calc_matrix() * camera.calc_matrix()).into();
     }
 }
 
@@ -88,8 +67,14 @@ struct State {
     window: Arc<Window>,
     depth_texture: Texture,
     render_pipeline: wgpu::RenderPipeline,
+    light_uniform: LightUniform,
+    light_buffer: wgpu::Buffer,
+    light_bind_group: wgpu::BindGroup,
+    light_render_pipeline: wgpu::RenderPipeline,
     resource_manager: ResourceManager,
     camera: Camera,
+    projection: Projection,
+    camera_controller: FreeFlyController,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -105,12 +90,15 @@ struct Instance {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct InstanceRaw {
     model: [[f32; 4]; 4],
+    normal: [[f32; 3]; 3],
 }
 
 impl Instance {
     fn to_raw(&self) -> InstanceRaw {
+        let model = Matrix4::from_translation(self.position) * Matrix4::from(self.rotation);
         InstanceRaw {
-            model: (Matrix4::from_translation(self.position) * Matrix4::from(self.rotation)).into()
+            model: model.into(),
+            normal: Matrix3::from(self.rotation).into(),
         }
     }
 }
@@ -141,17 +129,25 @@ impl InstanceRaw {
                     shader_location: 8,
                     format: wgpu::VertexFormat::Float32x4,
                 },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 16]>() as wgpu::BufferAddress,
+                    shader_location: 9,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 19]>() as wgpu::BufferAddress,
+                    shader_location: 10,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 22]>() as wgpu::BufferAddress,
+                    shader_location: 11,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
             ],
         }
     }
 }
-
-// as to not duplicate certain vertices, define a unique set above, and describe it's layout below
-const INDICES: &[u16] = &[
-    0, 1, 4,
-    1, 2, 4,
-    2, 3, 4,
-];
 
 impl State {
     async fn new(window: Arc<Window>) -> Self {
@@ -159,7 +155,7 @@ impl State {
 
         // instance is the main interface with wgpu, use this to create all other stuff
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::METAL,
+            backends: wgpu::Backends::all(),
             ..Default::default()
         });
 
@@ -240,6 +236,45 @@ impl State {
                     label: Some("texture_bind_group_layout")
                 });
 
+        let light_uniform = LightUniform {
+            position: [2.0, 2.0, 2.0],
+            _padding: 0,
+            color: [1.0, 1.0, 1.0],
+            _padding2: 0,
+        };
+
+        // we'll want to update our light's position, so COPY_DST
+        let light_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Light View buffer"),
+                contents: bytemuck::cast_slice(&[light_uniform]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST
+            }
+        );
+
+        let light_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+                label: Some("Light bind group layout")
+            });
+        let light_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &light_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: light_buffer.as_entire_binding()
+            }],
+            label: None,
+        });
+
         let resource_manager = ResourceManager::new(
             Path::new("./res"),
             &device,
@@ -247,21 +282,21 @@ impl State {
             &texture_bind_group_layout,
         );
 
-        let camera = Camera {
-            // position the camera 1 unit up and 2 units back
-            // +z is out of the screen
-            eye: (0.0, 2.0, 2.0).into(),
-            // have it look at the origin
-            target: (0.0, 1.0, 0.0).into(),
-            // which way is up
-            up: Vector3::unit_y(),
-            aspect: config.width as f32 / config.height as f32,
-            fov_y: 45.0,
-            z_near: 0.1, // near plane
-            z_far: 100.0, // far plane
-        };
+        let camera = Camera::new(
+            Point3::new(0.0, 2.0, -5.0),
+            Deg(90.0),
+            Deg(-15.0),
+        );
+        let projection = Projection::new(
+            config.width,
+            config.height,
+            Deg(45.0),
+            0.1,
+            100.0,
+        );
+        let camera_controller = FreeFlyController::new(6.0, 2.0);
         let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update_view_proj(&camera);
+        camera_uniform.update_view_proj(&camera, &projection);
 
         let camera_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
@@ -301,62 +336,48 @@ impl State {
             }
         );
 
-        let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
                 bind_group_layouts: &[
                     &texture_bind_group_layout,
-                    &camera_bind_group_layout
+                    &camera_bind_group_layout,
+                    &light_bind_group_layout,
                 ],
                 push_constant_ranges: &[],
             });
 
-        // future me please add comments to this
-        // https://sotrh.github.io/learn-wgpu/beginner/tutorial3-pipeline/#using-a-pipeline
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main", // must specify the entrypoint
-                buffers: &[
-                    ModelVertex::desc(), InstanceRaw::desc(),
-                ], // tells wgpu what type of vertices we want to pass to the shader
-            },
-            fragment: Some(wgpu::FragmentState { // technically optional
-                module: &shader,
-                entry_point: "fs_main", // must specify the entrypoint
-                targets: &[Some(wgpu::ColorTargetState { // tells wgpu what colour outputs to set up
-                    format: config.format, // only need the one output for now, use surface's format so it's easy to copy
-                    blend: Some(wgpu::BlendState::REPLACE), // no blend just replace
-                    write_mask: wgpu::ColorWrites::ALL, // use all colour channels
-                })],
-            }),
-            primitive: wgpu::PrimitiveState { // how to interpret vertices to convert them to triangles
-                topology: wgpu::PrimitiveTopology::TriangleList, // every 3 vertices will correspond to one triangle
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw, // tells wgpu how to determine whether a given triangle is facing forward or not
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: Texture::DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less, // less means front to back
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: 1, // how many samples the pipeline will use
-                mask: !0, // specifies which samples we are using
-                alpha_to_coverage_enabled: false, // anti aliasing
-            },
-            multiview: None,
-        });
+        let render_pipeline = {
+            let shader = include_wgsl!("shader.wgsl");
+            create_render_pipeline(
+                &device,
+                &render_pipeline_layout,
+                config.format,
+                Some(Texture::DEPTH_FORMAT),
+                &[ModelVertex::desc(), InstanceRaw::desc()],
+                shader,
+                "Render Pipeline",
+            )
+        };
+
+        let light_render_pipeline = {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Light Pipeline Layout"),
+                bind_group_layouts: &[&camera_bind_group_layout, &light_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+            let shader = include_wgsl!("light.wgsl");
+
+            create_render_pipeline(
+                &device,
+                &layout,
+                config.format,
+                Some(Texture::DEPTH_FORMAT),
+                &[ModelVertex::desc()],
+                shader,
+                "Light Render Pipeline",
+            )
+        };
 
         let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
             (0..NUM_INSTANCES_PER_ROW).map(move |x| {
@@ -367,6 +388,7 @@ impl State {
                 } else {
                     Quaternion::from_axis_angle(position.normalize(), Deg(45.0))
                 };
+                // let rotation = Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), Deg(180.0));
 
                 Instance {
                     position, rotation,
@@ -391,9 +413,15 @@ impl State {
             size,
             window,
             depth_texture,
+            light_uniform,
+            light_buffer,
+            light_bind_group,
+            light_render_pipeline,
             render_pipeline,
             resource_manager,
             camera,
+            projection,
+            camera_controller,
             camera_uniform,
             camera_buffer,
             camera_bind_group,
@@ -412,16 +440,28 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            self.depth_texture = Texture::create_depth_texture(&self.device, &self.config, "depth")
+            self.depth_texture = Texture::create_depth_texture(&self.device, &self.config, "depth");
+            self.projection.resize(new_size.width, new_size.height);
         }
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
-        false
+        self.camera_controller.process_input(event)
     }
 
-    fn update(&mut self) {
-        self.camera_uniform.update_view_proj(&self.camera);
+    fn update(&mut self, delta_time: f32) {
+        // update the light
+        {
+            let old_position: Vector3<_> = self.light_uniform.position.into();
+            self.light_uniform.position =
+                (Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), Deg(1.0))
+                    * old_position)
+                    .into();
+            self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
+        }
+
+        self.camera_controller.update_camera(&mut self.camera, delta_time);
+        self.camera_uniform.update_view_proj(&self.camera, &self.projection);
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
 
@@ -467,17 +507,19 @@ impl State {
                 timestamp_writes: None,
             });
 
-            let rustiscool_tex = &self.resource_manager.get_texture(&String::from("rustiscool.png")).expect("cant get tex");
-            let model = &self.resource_manager.get_model(&String::from("cube.obj")).expect("cant get model");
-
-            render_pass.set_pipeline(&self.render_pipeline);
-
-            render_pass.set_bind_group(0, &rustiscool_tex.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+            let model = &self.resource_manager.get_model(&String::from("cube.obj")).unwrap();
 
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
-            render_pass.draw_model_instanced(&model, 0..self.instances.len() as u32)
+            render_pass.set_pipeline(&self.light_render_pipeline);
+            render_pass.draw_light_model(
+                model,
+                &self.camera_bind_group,
+                &self.light_bind_group,
+            );
+
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.draw_model_instanced(model, 0..self.instances.len() as u32, &self.camera_bind_group, &self.light_bind_group);
         } // extra block tells borrower to drop any borrows, begin_render_pass borrows encoder, so to finish, we need to drop it
 
         // finish the command buffer and SEND
@@ -488,6 +530,74 @@ impl State {
     }
 }
 
+fn create_render_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    color_format: wgpu::TextureFormat,
+    depth_format: Option<wgpu::TextureFormat>,
+    vertex_layouts: &[wgpu::VertexBufferLayout],
+    shader: wgpu::ShaderModuleDescriptor,
+    name: &str,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(shader);
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(name),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: "vs_main", // must specify the entrypoint
+            buffers: vertex_layouts, // tells wgpu what type of vertices we want to pass to the shader
+        },
+        fragment: Some(wgpu::FragmentState { // technically optional
+            module: &shader,
+            entry_point: "fs_main", // must specify the entrypoint
+            targets: &[Some(wgpu::ColorTargetState { // tells wgpu what colour outputs to set up
+                format: color_format, // only need the one output for now, use surface's format so it's easy to copy
+                blend: Some(wgpu::BlendState::REPLACE), // no blend just replace
+                write_mask: wgpu::ColorWrites::ALL, // use all colour channels
+            })],
+        }),
+        primitive: wgpu::PrimitiveState { // how to interpret vertices to convert them to triangles
+            topology: wgpu::PrimitiveTopology::TriangleList, // every 3 vertices will correspond to one triangle
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw, // tells wgpu how to determine whether a given triangle is facing forward or not
+            cull_mode: Some(wgpu::Face::Back),
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
+            format,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less, // less means front to back
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: 1, // how many samples the pipeline will use
+            mask: !0, // specifies which samples we are using
+            alpha_to_coverage_enabled: false, // anti aliasing
+        },
+        multiview: None,
+    })
+}
+
+// Blinn-Phong Model
+
+// represents a colored point in space.
+// WGSL struct field alignments must be powers of 2.
+// e.g. a vec3 would be 12 bytes, but it would get bumped up to 16
+// so padding is used
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct LightUniform {
+    position: [f32; 3],
+    _padding: u32,
+    color: [f32; 3],
+    _padding2: u32,
+}
+
 pub async fn run() {
     env_logger::init();
     let event_loop = EventLoop::new().expect("cant create eventloop");
@@ -495,26 +605,33 @@ pub async fn run() {
 
     let mut state = State::new(window).await;
 
+    //state.window.set_cursor_grab(CursorGrabMode::Locked).expect("Could not grab cursor");
+
+    let mut last_render_time = std::time::Instant::now();
+
     event_loop.run(move |event, event_loop_window_target| {
         match event {
             Event::WindowEvent { ref event, window_id }
-                if window_id == state.window().id() => window_event(&mut state, event, event_loop_window_target),
-            Event::NewEvents(_) => {
-                state.window().request_redraw();
-            }
+                if window_id == state.window().id() => window_event(&mut state, event, event_loop_window_target, &mut last_render_time),
             _ => {}
-        }
+        };
+
+        state.window.request_redraw();
     }).expect("TODO: panic message");
 }
 
-fn window_event(state: &mut State, ref event: &WindowEvent, event_loop_window_target: &EventLoopWindowTarget<()>) {
+fn window_event(state: &mut State, ref event: &WindowEvent, event_loop_window_target: &EventLoopWindowTarget<()>, last_render_time: &mut std::time::Instant) {
     if state.input(event) {
         return;
     }
 
     match event {
         WindowEvent::RedrawRequested => {
-            state.update();
+            let now = std::time::Instant::now();
+            let dt = now.duration_since(*last_render_time).as_secs_f32();
+            *last_render_time = now;
+
+            state.update(dt);
             match state.render() {
                 Ok(_) => {}
                 Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
@@ -531,27 +648,6 @@ fn window_event(state: &mut State, ref event: &WindowEvent, event_loop_window_ta
             },
             ..
         } => event_loop_window_target.exit(),
-
-        WindowEvent::KeyboardInput {
-            event: KeyEvent {
-                state: ElementState::Pressed,
-                physical_key: Code(KeyCode::KeyW),
-                ..
-            },
-            ..
-        } => {
-            state.camera.offset_eye(&Vector3 { x: 0.5, y: 0.0, z: 0.0 })
-        }
-        WindowEvent::KeyboardInput {
-            event: KeyEvent {
-                state: ElementState::Pressed,
-                physical_key: Code(KeyCode::KeyS),
-                ..
-            },
-            ..
-        } => {
-            state.camera.offset_eye(&Vector3 { x: -0.5, y: 0.0, z: 0.0 })
-        }
 
         WindowEvent::Resized(physical_size) => {
             state.resize(*physical_size);
