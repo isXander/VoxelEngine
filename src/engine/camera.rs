@@ -1,7 +1,8 @@
 use std::f32::consts::FRAC_PI_2;
-use cgmath::{InnerSpace, Matrix4, Point3, Rad, Transform, Vector3};
-use winit::event::{KeyEvent, WindowEvent};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use cgmath::{InnerSpace, Matrix4, Point3, Rad, Vector3};
+use cgmath::prelude::*;
+use winit::event::WindowEvent;
+use winit::keyboard::KeyCode;
 use winit::keyboard::PhysicalKey::Code;
 
 pub const OPENGL_TO_WGPU_MATRIX: Matrix4<f32> = Matrix4::new(
@@ -81,6 +82,27 @@ impl Projection {
 
     pub fn calc_matrix(&self) -> Matrix4<f32> {
         OPENGL_TO_WGPU_MATRIX * cgmath::perspective(self.fov_y, self.aspect, self.z_near, self.z_far)
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CameraUniform {
+    view_position: [f32; 4],
+    view_proj: [[f32; 4]; 4],
+}
+
+impl CameraUniform {
+    pub fn new() -> Self {
+        Self {
+            view_position: [0.0; 4],
+            view_proj: Matrix4::identity().into(),
+        }
+    }
+
+    pub fn update_view_proj(&mut self, camera: &Camera, projection: &Projection) {
+        self.view_position = camera.position.to_homogeneous().into();
+        self.view_proj = (projection.calc_matrix() * camera.calc_matrix()).into();
     }
 }
 

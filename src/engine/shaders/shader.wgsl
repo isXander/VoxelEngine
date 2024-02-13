@@ -16,6 +16,8 @@ struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) tex_coords: vec2<f32>,
     @location(2) normal: vec3<f32>,
+    @location(3) tangent: vec3<f32>,
+    @location(4) bitangent: vec3<f32>,
 };
 
 // declare struct to store output of our shader
@@ -23,13 +25,15 @@ struct VertexOutput {
     // builtin tells wgpu that this value is what we want to use for clip coords, aka gl_Position
     @builtin(position) clip_position: vec4<f32>,
     @location(0) tex_coords: vec2<f32>,
-    @location(1) world_normal: vec3<f32>,
-    @location(2) world_position: vec3<f32>,
+    @location(1) tangent_position: vec3<f32>,
+    @location(2) tangent_light_position: vec3<f32>,
+    @location(3) tangent_view_position: vec3<f32>,
 };
 
 struct CameraUniform {
+    view_pos: vec4<f32>,
     view_proj: mat4x4<f32>,
-};
+}
 @group(1) @binding(0) // need to specify the diff bind group
 var<uniform> camera: CameraUniform;
 
@@ -50,12 +54,22 @@ fn vs_main(
         instance.normal_matrix_2,
     );
 
+    let world_normal = normalize(normal_matrix * model.normal);
+    let world_tangent = normalize(normal_matrix * model.tangent);
+    let world_bitangent = normalize(normal_matrix * model.bitangent);
+    let tangent_matrix = transpose(mat3x3<f32>(
+        world_tangent,
+        world_bitangent,
+        world_normal,
+    ));
+
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;
-    out.world_normal = model.normal * normal_matrix;
     var world_position: vec4<f32> = model_matrix * vec4<f32>(model.position, 1.0);
-    out.world_position = world_position.xyz;
     out.clip_position = camera.view_proj * model_matrix * vec4<f32>(model.position, 1.0);
+    out.tangent_position = tangent_matrix * world_position.xyz;
+    out.tangent_view_position = tangent_matrix * camera.view_pos.xyz;
+    out.tangent_light_position = tangent_matrix * light.position;
     return out;
 }
 
@@ -63,6 +77,14 @@ fn vs_main(
 var t_diffuse: texture_2d<f32>;
 @group(0) @binding(1)
 var s_diffuse: sampler;
+@group(0)@binding(2)
+var t_normal: texture_2d<f32>;
+@group(0) @binding(3)
+var s_normal: sampler;
+@group(0) @binding(4)
+var t_specular: texture_2d<f32>;
+@group(0) @binding(5)
+var s_specular: sampler;
 
 struct Light {
     position: vec3<f32>,
@@ -71,20 +93,35 @@ struct Light {
 @group(2) @binding(0)
 var<uniform> light: Light;
 
+const coordinate_system = mat3x3<f32>(
+    vec3(1, 0, 0), // x-axis (right)
+    vec3(0, 1, 0), // y-axis (up)
+    vec3(0, 0, 1)  // z-axis (forward)
+);
+
 @fragment // entrypoint
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let object_color = textureSample(t_diffuse, s_diffuse, in.tex_coords); // sets colour of frag to brown
+    let object_normal = textureSample(t_normal, s_normal, in.tex_coords);
+    let object_specular = textureSample(t_specular, s_specular, in.tex_coords);
 
     // without ambient lighting, shadows would be pitch black
-    let ambient_strength = 0.5;
+    let ambient_strength = 0.1;
     let ambient_color = light.color * ambient_strength;
 
-    let light_dir = normalize(light.position - in.world_position);
+    // Create the lighting vectors
+    let tangent_normal = object_normal.xyz * 2.0 - 1.0;
+    let light_dir = normalize(in.tangent_light_position - in.tangent_position);
+    let view_dir = normalize(in.tangent_view_position - in.tangent_position);
+    let half_dir = normalize(view_dir + light_dir);
 
-    let diffuse_strength = max(dot(in.world_normal, light_dir), 0.0);
+    let diffuse_strength = max(dot(tangent_normal, light_dir), 0.0);
     let diffuse_color = light.color * diffuse_strength;
 
-    let result = (ambient_color + diffuse_color) * object_color.xyz;
+    let specular_strength = pow(max(dot(tangent_normal, half_dir), 0.0), 32.0) * object_specular.x;
+    let specular_color = specular_strength * light.color;
+
+    let result = (ambient_color + diffuse_color + specular_color) * object_color.xyz;
 
     return vec4<f32>(result, object_color.a);
 }

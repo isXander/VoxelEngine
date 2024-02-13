@@ -1,6 +1,8 @@
 use std::mem;
 use std::ops::Range;
-use crate::texture::RegisteredTexture;
+use wgpu::util::DeviceExt;
+
+use crate::engine::texture::Texture;
 
 // trait is basically an interface
 // allows us to abstract out vertices into model, UI, instance data, etc
@@ -14,6 +16,8 @@ pub struct ModelVertex {
     pub position: [f32; 3],
     pub tex_coords: [f32; 2],
     pub normal: [f32; 3],
+    pub tangent: [f32; 3],
+    pub bitangent: [f32; 3],
 }
 
 impl Vertex for ModelVertex {
@@ -37,6 +41,16 @@ impl Vertex for ModelVertex {
                     shader_location: 2,
                     format: wgpu::VertexFormat::Float32x3,
                 },
+                wgpu::VertexAttribute { // tangent
+                    offset: mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute { // bitangent
+                    offset: mem::size_of::<[f32; 11]>() as wgpu::BufferAddress,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
             ],
         }
     }
@@ -49,7 +63,71 @@ pub struct Model {
 
 pub struct Material {
     pub name: String,
-    pub texture: RegisteredTexture,
+    pub diffuse_texture: Texture,
+    pub normal_texture: Texture,
+    pub specular_texture: Texture,
+    pub bind_group: wgpu::BindGroup,
+}
+
+impl Material {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        name: &str,
+        diffuse_texture: Option<Texture>,
+        normal_texture: Option<Texture>,
+        specular_texture: Option<Texture>,
+        layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        let diffuse_texture: Texture = diffuse_texture.unwrap_or_else(|| {
+            Texture::from_color(device, queue, &wgpu::Color::WHITE, "white").unwrap()
+        });
+        let normal_texture: Texture = normal_texture.unwrap_or_else(|| {
+            Texture::from_color(device, queue, &wgpu::Color::WHITE, "white").unwrap()
+        });
+        let specular_texture: Texture = specular_texture.unwrap_or_else(|| {
+            Texture::from_color(device, queue, &wgpu::Color::WHITE, "white").unwrap()
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&normal_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&normal_texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&specular_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&specular_texture.sampler),
+                },
+            ],
+            label: Some(name),
+        });
+
+        Self {
+            name: String::from(name),
+            diffuse_texture,
+            normal_texture,
+            specular_texture,
+            bind_group,
+        }
+    }
 }
 
 pub struct Mesh {
@@ -58,6 +136,37 @@ pub struct Mesh {
     pub index_buffer: wgpu::Buffer,
     pub num_elements: u32,
     pub material: usize,
+}
+
+impl Mesh {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        name: &str,
+        vertices: &[ModelVertex],
+        indices: &[u32],
+        material: usize,
+    ) -> Self {
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{} Vertex Buffer", name)),
+            contents: bytemuck::cast_slice(vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{} Index Buffer", name)),
+            contents: bytemuck::cast_slice(indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Self {
+            name: String::from(name),
+            vertex_buffer,
+            index_buffer,
+            num_elements: indices.len() as u32,
+            material,
+        }
+    }
 }
 
 pub trait DrawModel<'a> {
@@ -105,7 +214,7 @@ where
     fn draw_mesh_instanced(&mut self, mesh: &'b Mesh, material: &'a Material, instances: Range<u32>, camera_bind_group: &'a wgpu::BindGroup, light_bind_group: &'a wgpu::BindGroup) {
         self.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
         self.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        self.set_bind_group(0, &material.texture.bind_group, &[]);
+        self.set_bind_group(0, &material.bind_group, &[]);
         self.set_bind_group(1, camera_bind_group, &[]);
         self.set_bind_group(2, light_bind_group, &[]);
         self.draw_indexed(0..mesh.num_elements, 0, instances);
