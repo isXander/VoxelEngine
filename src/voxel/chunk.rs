@@ -1,22 +1,20 @@
 use std::usize;
-
-use wgpu::core::device;
-
 use crate::engine;
+use std::iter::Iterator;
 
 pub struct Chunk {
     voxels: [[[Voxel; 16]; 128]; 16],
 }
 
 impl Chunk {
-    pub fn new() -> Self {
+    pub fn new_empty() -> Self {
         Self {
             voxels: [[[Voxel { voxel_type: VoxelType::Air }; 16]; 128]; 16],
         }
     }
 
     pub fn new_plane(y: usize) -> Self {
-        let mut chunk = Self::new();
+        let mut chunk = Self::new_empty();
 
         for x in 0..16 {
             for z in 0..16 {
@@ -76,19 +74,21 @@ impl Chunk {
                         }
 
                         vertices.extend(create_face(x as f32, y as f32, z as f32, Face::from_ordinal(i)));
-                        //indices.extend(face_indices.iter().map(|index| index + vertices.len() as u32));
                     }
                 }
             }
         };
 
         // TODO: implement greedy meshing
-        // TODO: implement indicies
-        for i in 0..vertices.len() {
-            indices.push(i as u32);
+        
+        let mut unique_verts = vertices.clone();
+        unique_verts.dedup_by(|a, b| a.position == b.position);
+        for vert in vertices.iter() {
+            indices.push(unique_verts.iter()
+                .position(|v| v.position == vert.position).unwrap() as u32);
         }
 
-        engine::model::Mesh::new(device, queue, format!("Chunk Mesh {},{}", chunk_pos.0, chunk_pos.1).as_str(), &vertices, &indices, 0)
+        engine::model::Mesh::new(device, queue, format!("Chunk Mesh {},{}", chunk_pos.0, chunk_pos.1).as_str(), &unique_verts, &indices, 0)
     }
 }
 
