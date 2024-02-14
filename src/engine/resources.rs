@@ -6,12 +6,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufReader, Cursor};
 use std::path::Path;
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 pub struct ResourceManager {
     textures: HashMap<String, RegisteredTexture>,
     models: HashMap<String, Model>,
-    texture_atlas: TextureAtlas,
+    texture_atlas: Arc<TextureAtlas>,
 }
 
 impl ResourceManager {
@@ -63,7 +64,7 @@ impl ResourceManager {
             }
         }
 
-        let texture_atlas = Self::stitch_textures(device, queue, bind_group_layout, atlas_images);
+        let texture_atlas = Arc::new(Self::stitch_textures(device, queue, bind_group_layout, atlas_images));
 
         Self { textures, models, texture_atlas }
     }
@@ -159,7 +160,7 @@ impl ResourceManager {
             materials.push(Material::new(
                 device,
                 queue,
-                &m.name.as_str(),
+                m.name.as_str(),
                 diffuse_texture,
                 normal_texture,
                 specular_texture,
@@ -309,8 +310,8 @@ impl ResourceManager {
         });
 
         let ratio = largest_w as f32 / largest_h as f32;
-        let cols_f32 = ((textures.len() as f32).sqrt() / ratio.sqrt()).ceil() as f32;
-        let rows_f32 = (textures.len() as f32 / cols_f32).ceil() as f32;
+        let cols_f32 = ((textures.len() as f32).sqrt() / ratio.sqrt()).ceil();
+        let rows_f32 = (textures.len() as f32 / cols_f32).ceil();
         let cols = cols_f32 as u32;
         let rows = rows_f32 as u32;
         
@@ -365,7 +366,7 @@ impl ResourceManager {
         self.models.get(model_name)
     }
 
-    pub fn get_atlas(&self) -> &TextureAtlas {
+    pub fn get_atlas(&self) -> &Arc<TextureAtlas> {
         &self.texture_atlas
     }
 

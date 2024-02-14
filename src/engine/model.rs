@@ -130,6 +130,7 @@ impl Material {
     }
 }
 
+#[derive(Debug)]
 pub struct MeshData {
     pub vertices: Vec<ModelVertex>,
     pub indices: Vec<u32>,
@@ -146,7 +147,6 @@ pub struct Mesh {
 impl Mesh {
     pub fn from_raw(
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         name: &str,
         vertices: &[ModelVertex],
         indices: &[u32],
@@ -175,7 +175,6 @@ impl Mesh {
 
     pub fn from_data(
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         name: &str,
         mesh_data: &MeshData,
         material: usize,

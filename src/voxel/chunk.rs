@@ -1,17 +1,17 @@
-use std::{collections::{HashMap, VecDeque}, hash::Hash, sync::{mpsc::{Receiver, Sender}, Arc, Mutex}, usize, vec};
-use bytemuck::cast_box;
+use std::{collections::HashMap, sync::{mpsc::{Receiver, Sender}, Arc}, usize, vec};
 use enum_map::{enum_map, EnumMap};
 use lazy_static::lazy_static;
-use ndarray::{Array3, ArrayBase};
-use noise::{NoiseFn, Perlin, Seedable};
+use noise::{NoiseFn, Perlin};
 use threadpool::ThreadPool;
 
 use crate::engine;
 use std::iter::Iterator;
+use crate::engine::model::{Mesh, MeshData};
+use crate::engine::resources::TextureAtlas;
 
-use super::voxel::{Voxel, VoxelType, Face};
+use super::voxel::{Voxel, Type, Face};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Chunk {
     voxels: Box<[[[Voxel; 16]; 128]; 16]>,
 }
@@ -32,7 +32,7 @@ impl Chunk {
         let voxels = core::array::from_fn(|_| {
             core::array::from_fn(|_| {
                 core::array::from_fn(|_| {
-                    Voxel::create_default_type(VoxelType::Air)
+                    Voxel::create_default_type(Type::Air)
                 })
             })
         });
@@ -45,7 +45,7 @@ impl Chunk {
 
         for x in 0..16 {
             for z in 0..16 {
-                chunk.set_voxel(x, y, z, Voxel::create_default_type(VoxelType::Grass));
+                chunk.set_voxel(x, y, z, Voxel::create_default_type(Type::Dirt));
             }
         }
 
@@ -58,8 +58,8 @@ impl Chunk {
         for x in 0..16 {
             for z in 0..16 {
                 let y = x;
-                for y in 0..y as usize {
-                    chunk.set_voxel(x, y, z, Voxel::create_default_type(VoxelType::Grass));
+                for y in 0..y {
+                    chunk.set_voxel(x, y, z, Voxel::create_default_type(Type::Dirt));
                 }
             }
         }
@@ -75,7 +75,16 @@ impl Chunk {
             for z in 0..16 {
                 let y = sampler(x as f32, z as f32);
                 for y in 0..y.floor() as usize {
-                    chunk.set_voxel(x, y, z, Voxel::create_default_type(VoxelType::Grass));
+                    let voxel_type = match y {
+                        0..=15 => Some(Type::Sand),
+                        16..=50 => Some(Type::Dirt),
+                        51..=128 => Some(Type::Snow),
+                        _ => None,
+                    };
+
+                    if let Some(voxel_type) = voxel_type {
+                        chunk.set_voxel(x, y, z, Voxel::create_default_type(voxel_type));
+                    }
                 }
             }
         }
@@ -98,7 +107,11 @@ impl Chunk {
     pub fn create_mesh(
         &self,
         chunk_pos: (i32, i32),
-        texture_atlas: &engine::resources::TextureAtlas,
+        neighbour_left: &Chunk,
+        neighbour_right: &Chunk,
+        neighbour_up: &Chunk,
+        neighbour_down: &Chunk,
+        texture_atlas: &Arc<engine::resources::TextureAtlas>,
     ) -> engine::model::MeshData {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
@@ -113,7 +126,7 @@ impl Chunk {
                     let voxel = self.get_voxel(x, y, z);
 
                     // skip air voxels (aka empty)
-                    if voxel.voxel_type == VoxelType::Air {
+                    if voxel.voxel_type == Type::Air {
                         continue;
                     }
 
@@ -128,13 +141,25 @@ impl Chunk {
                     ];
 
                     for (i, neighbor) in neighbors.iter().enumerate() {
-                        let is_face_visible = neighbor.is_none() || neighbor.unwrap().voxel_type == VoxelType::Air;
+                        let face = Face::from_ordinal(i);
+
+                        let neighbor = neighbor.or_else(|| {
+                            // must be edge of chunk on x or z, get neighboring voxel from neighboring chunk
+                            match face {
+                                Face::North => Some(neighbour_up.get_voxel(x, y, 15)),
+                                Face::South => Some(neighbour_down.get_voxel(x, y, 0)),
+                                Face::East => Some(neighbour_right.get_voxel(0, y, z)),
+                                Face::West => Some(neighbour_left.get_voxel(15, y, z)),
+                                _ => None,
+                            }
+                        });
+
+                        let is_face_visible = neighbor.is_none() || neighbor.unwrap().voxel_type == Type::Air;
 
                         if !is_face_visible {
                             continue;
                         }
 
-                        let face = Face::from_ordinal(i);
                         let texture = FACE_TEXTURES[voxel.voxel_type].get_texture(&face);
 
                         let (face_verts, face_indicies) = create_face(chunk_x as f32 + x as f32, y as f32, chunk_z as f32 + z as f32, &face, texture, texture_atlas);
@@ -147,30 +172,30 @@ impl Chunk {
             }
         };
 
-        engine::model::MeshData {
+        MeshData {
             vertices,
             indices,
         }
     }
 }
 
-pub fn create_face(
+fn create_face(
     x: f32, y: f32, z: f32,
     face: &Face,
     texture_name: &'static str,
-    atlas: &engine::resources::TextureAtlas,
+    atlas: &Arc<engine::resources::TextureAtlas>,
 ) -> (Vec<engine::model::ModelVertex>, Vec<u32>) {
     let cell = atlas.cells.get(texture_name).unwrap();
 
     let mut vertices = Vec::new();
 
-    let (norm_x, norm_y, norm_z) = match face {
-        Face::Top => (0.0, 1.0, 0.0),
-        Face::Bottom => (0.0, -1.0, 0.0),
-        Face::North => (0.0, 0.0, -1.0),
-        Face::South => (0.0, 0.0, 1.0),
-        Face::East => (1.0, 0.0, 0.0),
-        Face::West => (-1.0, 0.0, 0.0),
+    let (normal_vector, tangent_vector, bitangent_vector) = match face {
+        Face::Top => ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+        Face::Bottom => ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        Face::North => ([0.0, 0.0, -1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        Face::South => ([0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        Face::East => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+        Face::West => ([-1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
     };
 
     struct VertexData {
@@ -222,7 +247,7 @@ pub fn create_face(
     let vertices_data = [
         &top_left, &bottom_left, &bottom_right, &top_right,
     ];
-    let indicies = vec![
+    let indices = vec![
         0, 1, 2,
         0, 2, 3,
     ];
@@ -232,27 +257,22 @@ pub fn create_face(
 
         vertices.push(engine::model::ModelVertex {
             position: [vert.x, vert.y, vert.z],
-            normal: [norm_x, norm_y, norm_z],
+            normal: normal_vector,
             tex_coords: [u, v],
-            bitangent: [0.0, 0.0, 0.0],
-            tangent: [0.0, 0.0, 0.0],
+            bitangent: tangent_vector,
+            tangent: bitangent_vector,
         });
     }
 
-    (vertices, indicies)
+    (vertices, indices)
 }
 
 lazy_static! {
-    static ref FACE_TEXTURES: EnumMap<VoxelType, VoxelFaceTextures> = enum_map! {
-        VoxelType::Air => VoxelFaceTextures::new_uniform("air"),
-        VoxelType::Grass => VoxelFaceTextures {
-            top: "grass_top.atlas.png",
-            bottom: "dirt.atlas.png",
-            north: "grass_side.atlas.png",
-            south: "grass_side.atlas.png",
-            east: "grass_side.atlas.png",
-            west: "grass_side.atlas.png",
-        },
+    static ref FACE_TEXTURES: EnumMap<Type, VoxelFaceTextures> = enum_map! {
+        Type::Air => VoxelFaceTextures::new_uniform("air"),
+        Type::Dirt => VoxelFaceTextures::new_uniform("dirt.atlas.png"),
+        Type::Sand => VoxelFaceTextures::new_uniform("sand.atlas.png"),
+        Type::Snow => VoxelFaceTextures::new_uniform("snow.atlas.png"),
     };
 }
 
@@ -280,58 +300,69 @@ impl VoxelFaceTextures {
 
     fn get_texture(&self, face: &Face) -> &'static str {
         match face {
-            Face::Top => &self.top,
-            Face::Bottom => &self.bottom,
-            Face::North => &self.north,
-            Face::South => &self.south,
-            Face::East => &self.east,
-            Face::West => &self.west,
+            Face::Top => self.top,
+            Face::Bottom => self.bottom,
+            Face::North => self.north,
+            Face::South => self.south,
+            Face::East => self.east,
+            Face::West => self.west,
         }
     }
 }
 
 pub struct ChunkManager {
-    chunks: HashMap<i64, ChunkState>,
+    chunks: HashMap<u64, ChunkState>,
     center_chunk: (i32, i32),
     render_distance: usize,
+
     thread_pool: ThreadPool,
-    chunk_thread_sender: Sender<(i64, ChunkState)>,
-    chunk_thread_receiver: Receiver<(i64, ChunkState)>,
+
+    chunkgen_thread_sender: Sender<(u64, ChunkState)>,
+    chunkgen_thread_receiver: Receiver<(u64, ChunkState)>,
+
+    chunkmesh_out_sender: Sender<(u64, MeshData)>,
+    chunkmesh_out_receiver: Receiver<(u64, MeshData)>,
 }
 
 impl ChunkManager {
     pub fn new(render_distance: usize, workers: usize) -> Self {
         let chunks = HashMap::new();
         let thread_pool = ThreadPool::new(workers);
-        let (chunk_thread_sender, chunk_thread_receiver) = std::sync::mpsc::channel();
+
+        let (chunkgen_thread_sender, chunkgen_thread_receiver) = std::sync::mpsc::channel();
+        let (chunkmesh_out_sender, chunkmesh_out_receiver) = std::sync::mpsc::channel();
 
         Self {
             chunks,
             center_chunk: (0, 0),
             render_distance,
             thread_pool,
-            chunk_thread_sender,
-            chunk_thread_receiver,
+            chunkgen_thread_sender,
+            chunkgen_thread_receiver,
+
+
+            chunkmesh_out_sender,
+            chunkmesh_out_receiver,
         }
     }
 
-    pub fn get_chunk(&self, x: i32, z: i32) -> &ChunkState {
-        &self.chunks.get(&Self::pack_coordinates(x, z)).unwrap()
+    pub fn get_chunk(&self, x: i32, z: i32) -> Option<&ChunkState> {
+        self.chunks.get(&Self::pack_coordinates(x, z))
     }
 
-    pub fn get_chunk_mut(&mut self, x: i32, z: i32) -> &mut ChunkState {
-        self.chunks.get_mut(&Self::pack_coordinates(x, z)).unwrap()
+    pub fn get_chunk_mut(&mut self, x: i32, z: i32) -> Option<&mut ChunkState> {
+        self.chunks.get_mut(&Self::pack_coordinates(x, z))
     }
 
-    pub fn get_center_chunk(&self) -> &ChunkState {
-        &self.get_chunk(self.center_chunk.0, self.center_chunk.1)
+    pub fn get_center_chunk(&self) -> Option<&ChunkState> {
+        self.get_chunk(self.center_chunk.0, self.center_chunk.1)
     }
 
-    pub fn get_center_chunk_mut(&mut self) -> &mut ChunkState {
+    pub fn get_center_chunk_mut(&mut self) -> Option<&mut ChunkState> {
         self.get_chunk_mut(self.center_chunk.0, self.center_chunk.1)
     }
 
-    pub fn set_center_chunk(&mut self, x: i32, z: i32, texture_atlas: &engine::resources::TextureAtlas) {
+    pub fn set_center_chunk(&mut self, x: i32, z: i32) {
         if self.center_chunk == (x, z) {
             return;
         }
@@ -340,7 +371,7 @@ impl ChunkManager {
 
         // completely remove chunks outside of render distance from the map
         let mut to_remove = Vec::new();
-        for coords in self.chunks.keys().into_iter() {
+        for coords in self.chunks.keys() {
             let (cx, cz) = Self::unpack_coordinates(*coords);
             let distance = ((cx - x).pow(2) + (cz - z).pow(2)) as f32;
             if distance.sqrt() > self.render_distance as f32 {
@@ -352,19 +383,7 @@ impl ChunkManager {
         }
 
         // load all chunks within render distance
-        self.fill_map_renderdistance(texture_atlas);
-    }
-
-    pub fn upload_chunk_meshes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, texture_atlas: &engine::resources::TextureAtlas) {
-        let total_chunks = self.chunks.len();
-
-        for (i, (coords, chunk_state)) in self.chunks.iter_mut().enumerate() {
-            let chunk_pos = Self::unpack_coordinates(*coords);
-            if let ChunkState::Loaded(LoadedChunk::MeshCreated { chunk, mesh_data }) = chunk_state {
-                let mesh = engine::model::Mesh::from_data(device, queue, format!("Chunk Mesh {},{}", chunk_pos.0, chunk_pos.1).as_str(), mesh_data, 0);
-                *chunk_state = ChunkState::Loaded(LoadedChunk::MeshUploaded { chunk: chunk.clone(), mesh });
-            }
-        }
+        self.fill_map_renderdistance();
     }
 
     pub fn get_all_chunks(&self) -> Vec<&ChunkState> {
@@ -375,15 +394,15 @@ impl ChunkManager {
         (x.floor() as i32 / 16, z.floor() as i32 / 16)
     }
 
-    fn fill_map_renderdistance(&mut self, texture_atlas: &engine::resources::TextureAtlas) {
+    pub fn fill_map_renderdistance(&mut self) {
         let perlin = Perlin::new(1);
         let render_distance = self.render_distance as i32;
 
         // fill the map with chunks within render distance, in a circle around the center chunk
         // make sure to use pi for circularity
         // use euclidean tile-space distance to determine if a chunk is within render distance
-        for x in -render_distance as i32..=render_distance as i32 {
-            for z in -render_distance as i32..=render_distance as i32 {
+        for x in -render_distance..=render_distance {
+            for z in -render_distance..=render_distance {
                 let chunk_x = self.center_chunk.0 + x;
                 let chunk_z = self.center_chunk.1 + z;
                 let distance = (x.pow(2) + z.pow(2)) as f32;
@@ -400,7 +419,8 @@ impl ChunkManager {
                 }
 
                 self.chunks.insert(Self::pack_coordinates(chunk_x, chunk_z), ChunkState::LoadScheduled);
-                let sender = self.chunk_thread_sender.clone();
+
+                let sender = self.chunkgen_thread_sender.clone();
 
                 self.thread_pool.execute(move || {
                     sender.send((Self::pack_coordinates(chunk_x, chunk_z), ChunkState::Loading)).unwrap();
@@ -408,14 +428,12 @@ impl ChunkManager {
                     let chunk = Chunk::new_heightmap(|vx, vz| {
                         let scale = 100.0;
                         let noise = (perlin.get([((chunk_x * 16) as f64 + vx as f64) / scale + 0.5, ((chunk_z * 16) as f64 + vz as f64) / scale + 0.5]) + 1.0) * 40.0;
-                        noise as f32
+                        noise as f32 + 1.0
                     });
-                    let mesh_data = chunk.create_mesh((chunk_x, chunk_z), texture_atlas);
 
                     let state = ChunkState::Loaded(
-                        LoadedChunk::MeshCreated {
-                            chunk,
-                            mesh_data,
+                        LoadedChunk::Stored {
+                            chunk: Arc::new(chunk),
                         },
                     );
 
@@ -425,23 +443,131 @@ impl ChunkManager {
         }
     }
 
-    pub fn receive_generated_chunks(&mut self) {
-        while let Ok((coords, state)) = self.chunk_thread_receiver.try_recv() {
+    pub fn receive_generated_chunks(&mut self, texture_atlas: &Arc<TextureAtlas>) {
+        let mut new_chunks = Vec::new();
+
+        while let Ok(received) = self.chunkgen_thread_receiver.try_recv() {
+            new_chunks.push(received);
+        }
+
+        // sort new chunks from closest to center to farthest, also place new chunks adjacent to eachother
+        // new_chunks.sort_by(|(coords_a, _), (coords_b, _)| {
+        //     let (ax, az) = Self::unpack_coordinates(*coords_a);
+        //     let (bx, bz) = Self::unpack_coordinates(*coords_b);
+        //     let distance_a = ((ax - self.center_chunk.0).pow(2) + (az - self.center_chunk.1).pow(2)) as f32;
+        //     let distance_b = ((bx - self.center_chunk.0).pow(2) + (bz - self.center_chunk.1).pow(2)) as f32;
+        //     distance_a.partial_cmp(&distance_b).unwrap()
+        // });
+
+        for (coords, state) in new_chunks {
+            let (x, z) = Self::unpack_coordinates(coords);
+
             self.chunks.insert(coords, state);
+            let state = self.chunks.get(&coords).unwrap();
+
+            if let ChunkState::Loaded(LoadedChunk::Stored {..}) = state {
+                // once chunk has generated, check its neighbours if they are now able to mesh, with all 4 of their neighbours
+
+                // loop thru newly gened's neighbours
+                for (nx, nz) in [(0, 1), (0, -1), (1, 0), (-1, 0)] { // diagonal neighbours aren't needed
+                    let (nx, nz) = (x + nx, z + nz);
+                    let neighbour = self.get_chunk(nx, nz);
+
+                    if let Some(ChunkState::Loaded(LoadedChunk::Stored { chunk: neighbour_chunk })) = neighbour {
+                        // we found a stored neighbour, now check if this chunk now has all 4 neighbours
+
+                        let surrounding_neighbors = [(0, 1), (0, -1), (1, 0), (-1, 0)].iter()
+                            .filter_map(|(nnx, nnz)| {
+                                let (nnx, nnz) = (nx + nnx, nz + nnz);
+                                let nn_state = self.get_chunk(nnx, nnz);
+
+                                match nn_state {
+                                    Some(ChunkState::Loaded(LoadedChunk::Stored { chunk })) => Some(chunk),
+                                    Some(ChunkState::Loaded(LoadedChunk::Meshed { chunk, ..})) => Some(chunk),
+                                    _ => None,
+                                }
+                            }).collect::<Vec<_>>();
+
+                        let neighbour_is_surrounded = surrounding_neighbors.len() == 4;
+
+                        // this neighbour can now be meshed
+                        if neighbour_is_surrounded {
+                            let nn_down = surrounding_neighbors.get(0).unwrap();
+                            let nn_up = surrounding_neighbors.get(1).unwrap();
+                            let nn_right = surrounding_neighbors.get(2).unwrap();
+                            let nn_left = surrounding_neighbors.get(3).unwrap();
+
+                            self.dispatch_chunk_mesh(
+                                nx, nz,
+                                neighbour_chunk,
+                                nn_left, nn_right, nn_up, nn_down,
+                                texture_atlas,
+                            )
+                        }
+                    }
+                };
+            }
         }
     }
 
-    fn pack_coordinates(x: i32, z: i32) -> i64 {
-        (x as i64) << 32 | (z as i64)
+    fn dispatch_chunk_mesh(
+        &self,
+        chunk_x: i32, chunk_z: i32,
+        chunk: &Arc<Chunk>,
+        neighbour_left: &Arc<Chunk>,
+        neighbour_right: &Arc<Chunk>,
+        neighbour_up: &Arc<Chunk>,
+        neighbour_down: &Arc<Chunk>,
+        texture_atlas: &Arc<TextureAtlas>
+    ) {
+        let sender = self.chunkmesh_out_sender.clone();
+        let chunk = chunk.clone();
+        let neighbour_left = neighbour_left.clone();
+        let neighbour_right = neighbour_right.clone();
+        let neighbour_up = neighbour_up.clone();
+        let neighbour_down = neighbour_down.clone();
+        let texture_atlas = texture_atlas.clone();
+
+        self.thread_pool.execute(move || {
+            let mesh_data = chunk.create_mesh(
+                (chunk_x, chunk_z),
+                &neighbour_left,
+                &neighbour_right,
+                &neighbour_up,
+                &neighbour_down,
+                &texture_atlas
+            );
+            let packed = Self::pack_coordinates(chunk_x, chunk_z);
+
+            sender.send((packed, mesh_data)).unwrap();
+        });
     }
 
-    fn unpack_coordinates(packed: i64) -> (i32, i32) {
+    pub fn upload_chunk_meshes(&mut self, device: &wgpu::Device) {
+        while let Ok((coords, mesh_data)) = self.chunkmesh_out_receiver.try_recv() {
+            match self.chunks.get_mut(&coords) {
+                Some(chunk_state) => {
+                    if let ChunkState::Loaded(LoadedChunk::Stored { chunk }) = chunk_state {
+                        let mesh = Mesh::from_data(device, "Chunk Mesh", &mesh_data, 0);
+                        *chunk_state = ChunkState::Loaded(LoadedChunk::Meshed { chunk: chunk.clone(), mesh });
+                    }
+                },
+                None => eprintln!("Chunk mesh upload failed, chunk not found in map"),
+            }
+
+        }
+    }
+
+    fn pack_coordinates(x: i32, z: i32) -> u64 {
+        (x as u32 as u64) << 32 | (z as u32 as u64)
+    }
+
+    fn unpack_coordinates(packed: u64) -> (i32, i32) {
         let x = (packed >> 32) as i32;
-        let z = packed as i32;
+        let z = (packed & 0xFFFFFFFF) as i32;
         (x, z)
     }
 }
-
 pub enum ChunkState {
     LoadScheduled,
     Loading,
@@ -450,6 +576,6 @@ pub enum ChunkState {
 }
 
 pub enum LoadedChunk {
-    MeshUploaded { chunk: Chunk, mesh: engine::model::Mesh },
-    MeshCreated { chunk: Chunk, mesh_data: engine::model::MeshData },
+    Meshed { chunk: Arc<Chunk>, mesh: engine::model::Mesh },
+    Stored { chunk: Arc<Chunk> },
 }

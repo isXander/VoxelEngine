@@ -1,10 +1,11 @@
 #[derive(Clone, Copy, Debug)]
 pub struct Voxel {
-    pub voxel_type: VoxelType,
+    pub voxel_type: Type,
 }
 
 impl Voxel {
-    pub fn create_default_type(voxel_type: VoxelType) -> Self {
+    #[must_use]
+    pub fn create_default_type(voxel_type: Type) -> Self {
         Self {
             voxel_type,
         }
@@ -12,9 +13,11 @@ impl Voxel {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, enum_map::Enum)]
-pub enum VoxelType {
+pub enum Type {
     Air,
-    Grass,
+    Dirt,
+    Sand,
+    Snow,
 }
 
 #[derive(Debug)]
@@ -28,6 +31,7 @@ pub enum Face {
 }
 
 impl Face {
+    #[must_use]
     pub fn to_ordinal(&self) -> usize {
         match self {
             Face::Top => 0,
@@ -39,6 +43,7 @@ impl Face {
         }
     }
 
+    #[must_use]
     pub fn from_ordinal(ordinal: usize) -> Self {
         match ordinal {
             0 => Face::Top,

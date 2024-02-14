@@ -5,25 +5,22 @@ pub mod camera;
 
 use std::mem;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use cgmath::{Deg, InnerSpace, Matrix3, Matrix4, Point3, Quaternion, Vector3, Zero};
+use std::sync::Arc;
+use cgmath::{Deg, Matrix3, Matrix4, Point3, Quaternion, Vector3};
 use cgmath::prelude::*;
-use wgpu::{include_wgsl, Color, PresentMode};
+use wgpu::{include_wgsl, PresentMode};
 use wgpu::util::DeviceExt;
 use winit::{event::*, event_loop::EventLoop, window::WindowBuilder};
 use winit::event_loop::EventLoopWindowTarget;
 use winit::keyboard::Key::Named;
 use winit::keyboard::NamedKey;
-use winit::window::{CursorGrabMode, Window};
+use winit::window::Window;
 use camera::{Camera, CameraUniform, CameraController, FreeFlyController, Projection};
 use model::{DrawLight, DrawModel, ModelVertex, Vertex};
 use resources::ResourceManager;
 use texture::Texture;
 
 use crate::voxel::chunk::{self, Chunk, ChunkManager, ChunkState, LoadedChunk};
-
-const NUM_INSTANCES_PER_ROW: u32 = 10;
-const INSTANCE_DISPLACEMENT: Vector3<f32> = Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
 
 // The coordinate system in Wgpu is based on DirectX and Metal's coordinate systems.
 // That means that in normalized device coordinates (opens new window),
@@ -136,7 +133,7 @@ impl State {
 
         // instance is the main interface with wgpu, use this to create all other stuff
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends: wgpu::Backends::VULKAN,
             ..Default::default()
         });
 
@@ -181,7 +178,7 @@ impl State {
             height: size.height,
             present_mode: surface_caps.present_modes.iter() // determines how to 'present' the surface to the display, e.g. vsync
                 .copied()
-                .find(|f| f == &PresentMode::AutoVsync)
+                .find(|f| f == &PresentMode::Immediate)
                 .unwrap_or(PresentMode::Fifo), // fifo supported on all
             desired_maximum_frame_latency: 2,
             alpha_mode: surface_caps.alpha_modes[0],
@@ -253,7 +250,7 @@ impl State {
                 });
 
         let light_uniform = LightUniform {
-            position: [2.0, 2.0, 2.0],
+            position: [500.0, 300.0, 500.0],
             _padding: 0,
             color: [1.0, 1.0, 1.0],
             _padding2: 0,
@@ -299,7 +296,7 @@ impl State {
         );
 
         let camera = Camera::new(
-            Point3::new(0.0, 24.0, -5.0),
+            Point3::new(20.0, 50.0, 20.0),
             Deg(90.0),
             Deg(-15.0),
         );
@@ -310,7 +307,7 @@ impl State {
             0.1,
             100.0,
         );
-        let camera_controller = FreeFlyController::new(20.0, 2.0);
+        let camera_controller = FreeFlyController::new(200.0, 2.0);
         let mut camera_uniform = CameraUniform::new();
         camera_uniform.update_view_proj(&camera, &projection);
 
@@ -425,7 +422,7 @@ impl State {
             }
         );
 
-        let chunk_manager = ChunkManager::new(8, 8);
+        let chunk_manager = ChunkManager::new(32, 8);
 
         Self {
             surface,
@@ -477,7 +474,7 @@ impl State {
         {
             let old_position: Vector3<_> = self.light_uniform.position.into();
             self.light_uniform.position =
-                (Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), Deg(1.0))
+                (Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), Deg(0.0))
                     * old_position)
                     .into();
             self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
@@ -487,9 +484,8 @@ impl State {
         self.camera_uniform.update_view_proj(&self.camera, &self.projection);
 
         let (chunk_x, chunk_z) = ChunkManager::pos_to_chunk_coords(self.camera.position.x, self.camera.position.z);
-        self.chunk_manager.set_center_chunk(chunk_x, chunk_z, self.resource_manager.get_atlas());
-
-        self.chunk_manager.receive_generated_chunks();
+        self.chunk_manager.set_center_chunk(chunk_x, chunk_z);
+        self.chunk_manager.fill_map_renderdistance();
 
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
@@ -549,10 +545,11 @@ impl State {
 
             render_pass.set_pipeline(&self.render_pipeline);
 
-            self.chunk_manager.upload_chunk_meshes(&self.device, &self.queue, self.resource_manager.get_atlas());
+            self.chunk_manager.receive_generated_chunks(&self.resource_manager.get_atlas());
+            self.chunk_manager.upload_chunk_meshes(&self.device);
 
             for chunk_state in self.chunk_manager.get_all_chunks() {
-                if let ChunkState::Loaded(LoadedChunk::MeshUploaded { chunk: _, mesh }) = chunk_state {
+                if let ChunkState::Loaded(LoadedChunk::Meshed { chunk: _, mesh }) = chunk_state {
                     render_pass.draw_mesh(
                         mesh,
                         &self.resource_manager.get_atlas().material,
@@ -661,7 +658,7 @@ pub async fn run() {
     }).expect("TODO: panic message");
 }
 
-fn window_event(state: &mut State, ref event: &WindowEvent, event_loop_window_target: &EventLoopWindowTarget<()>, last_render_time: &mut std::time::Instant) {
+fn window_event(state: &mut State, event: &WindowEvent, event_loop_window_target: &EventLoopWindowTarget<()>, last_render_time: &mut std::time::Instant) {
     if state.input(event) {
         return;
     }
@@ -692,9 +689,6 @@ fn window_event(state: &mut State, ref event: &WindowEvent, event_loop_window_ta
 
         WindowEvent::Resized(physical_size) => {
             state.resize(*physical_size);
-        }
-        WindowEvent::ScaleFactorChanged { inner_size_writer, .. } => {
-            // TODO: how tf do you do this
         }
         _ => {}
     }

@@ -1,4 +1,3 @@
-use std::f32::consts::FRAC_PI_2;
 use cgmath::{InnerSpace, Matrix4, Point3, Rad, Vector3};
 use cgmath::prelude::*;
 use winit::event::WindowEvent;
@@ -11,8 +10,6 @@ pub const OPENGL_TO_WGPU_MATRIX: Matrix4<f32> = Matrix4::new(
     0.0, 0.0, 0.5, 0.5,
     0.0, 0.0, 0.0, 1.0,
 );
-
-const SAFE_FRAC_PI_2: f32 = FRAC_PI_2 - 0.0001;
 
 pub struct Camera {
     pub position: Point3<f32>,
@@ -107,7 +104,7 @@ impl CameraUniform {
 }
 
 pub trait CameraController {
-    fn process_input(&mut self, event: &winit::event::WindowEvent) -> bool;
+    fn process_input(&mut self, event: &WindowEvent) -> bool;
 
     fn update_camera(&self, camera: &mut Camera, delta_time: f32);
 }

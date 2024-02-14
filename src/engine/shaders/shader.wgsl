@@ -106,7 +106,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let object_specular = textureSample(t_specular, s_specular, in.tex_coords);
 
     // without ambient lighting, shadows would be pitch black
-    let ambient_strength = 0.1;
+    let ambient_strength = 0.2;
     let ambient_color = light.color * ambient_strength;
 
     // Create the lighting vectors
@@ -121,7 +121,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let specular_strength = pow(max(dot(tangent_normal, half_dir), 0.0), 32.0) * object_specular.x;
     let specular_color = specular_strength * light.color;
 
-    let result = /*(ambient_color + diffuse_color + specular_color) * */ object_color.xyz;
+    let result = (ambient_color + diffuse_color/* + specular_color*/) * object_color.xyz;
 
     return vec4<f32>(result, object_color.a);
 }
