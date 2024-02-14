@@ -422,7 +422,9 @@ impl State {
             }
         );
 
-        let chunk_manager = ChunkManager::new(32, 8);
+        let available_parallelism = std::thread::available_parallelism().map(|x| x.into()).unwrap_or(1);
+        println!("Using {} workers for chunk manager", available_parallelism);
+        let chunk_manager = ChunkManager::new(32, available_parallelism);
 
         Self {
             surface,

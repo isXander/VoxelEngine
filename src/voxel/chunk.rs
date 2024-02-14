@@ -451,13 +451,13 @@ impl ChunkManager {
         }
 
         // sort new chunks from closest to center to farthest, also place new chunks adjacent to eachother
-        // new_chunks.sort_by(|(coords_a, _), (coords_b, _)| {
-        //     let (ax, az) = Self::unpack_coordinates(*coords_a);
-        //     let (bx, bz) = Self::unpack_coordinates(*coords_b);
-        //     let distance_a = ((ax - self.center_chunk.0).pow(2) + (az - self.center_chunk.1).pow(2)) as f32;
-        //     let distance_b = ((bx - self.center_chunk.0).pow(2) + (bz - self.center_chunk.1).pow(2)) as f32;
-        //     distance_a.partial_cmp(&distance_b).unwrap()
-        // });
+        new_chunks.sort_by(|(coords_a, _), (coords_b, _)| {
+            let (ax, az) = Self::unpack_coordinates(*coords_a);
+            let (bx, bz) = Self::unpack_coordinates(*coords_b);
+            let distance_a = ((ax - self.center_chunk.0).pow(2) + (az - self.center_chunk.1).pow(2)) as f32;
+            let distance_b = ((bx - self.center_chunk.0).pow(2) + (bz - self.center_chunk.1).pow(2)) as f32;
+            distance_a.partial_cmp(&distance_b).unwrap()
+        });
 
         for (coords, state) in new_chunks {
             let (x, z) = Self::unpack_coordinates(coords);
