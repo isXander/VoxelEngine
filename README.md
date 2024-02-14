@@ -8,4 +8,6 @@
 - [ ] Chunk save/load
 - [x] Texture atlas
 - [ ] Mipmapping
-- [ ] Collision/physics 
+- [ ] Collision/physics
+- [ ] Voxel lighting
+- [x] Shader lighting
