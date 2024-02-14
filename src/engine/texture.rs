@@ -41,6 +41,10 @@ impl Texture {
         let rgba = img.to_rgba8();
         let dimensions = img.dimensions();
 
+        if dimensions.0 == 0 || dimensions.1 == 0 {
+            bail!("Texture has a dimension of 0");
+        }
+
         // all textures represented in 3d, z is depth, set 2d texture as depth 1
         let size = wgpu::Extent3d {
             width: dimensions.0,
@@ -90,7 +94,7 @@ impl Texture {
                 address_mode_u: wgpu::AddressMode::ClampToEdge, // these tell the sampler what to do when uv is out of bounds
                 address_mode_v: wgpu::AddressMode::ClampToEdge,
                 address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear, // what to do when the image is too small and needs to be enlarged
+                mag_filter: wgpu::FilterMode::Nearest, // what to do when the image is too small and needs to be enlarged
                 min_filter: wgpu::FilterMode::Nearest, // what to do when the image is too large and needs to be shrank
                 mipmap_filter: wgpu::FilterMode::Nearest,
                 ..Default::default()

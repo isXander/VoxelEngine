@@ -1,6 +1,7 @@
 use crate::engine::model::{Material, Mesh, Model, ModelVertex};
 use crate::engine::texture::{RegisteredTexture, Texture};
 use cgmath::{Vector2, Vector3};
+use image::{GenericImage, GenericImageView};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufReader, Cursor};
@@ -10,11 +11,13 @@ use wgpu::util::DeviceExt;
 pub struct ResourceManager {
     textures: HashMap<String, RegisteredTexture>,
     models: HashMap<String, Model>,
+    texture_atlas: TextureAtlas,
 }
 
 impl ResourceManager {
-    const TEXTURE_EXTENSIONS: &'static [&'static str] = &["png", "webp"];
-    const MODEL_EXTENSIONS: &'static [&'static str] = &["obj"];
+    const TEXTURE_EXTENSIONS: &'static [&'static str] = &[".tex.png", ".tex.webp"];
+    const MODEL_EXTENSIONS: &'static [&'static str] = &[".obj"];
+    const ATLAS_EXTENSIONS: &'static [&'static str] = &[".atlas.png"];
 
     pub fn new(
         directory: &Path,
@@ -27,9 +30,10 @@ impl ResourceManager {
 
         let paths = fs::read_dir(directory).expect("can't read dir");
 
+        let mut atlas_images = Vec::new();
+
         for path in paths {
             let file = path.expect("cant get path").path();
-            let extension = file.extension().expect("cant get extension");
 
             let file_name = file
                 .file_name()
@@ -41,10 +45,10 @@ impl ResourceManager {
             let file_data = fs::read(&file).expect("cant read data");
             let file_data_arr = file_data.as_slice();
 
-            if Self::TEXTURE_EXTENSIONS.iter().any(|&ext| ext == extension) {
-                //let texture = Self::create_bind_texture(file_data_arr, file_path_relative, device, queue, bind_group_layout);
-                //textures.insert(file_path_relative.to_str().unwrap().to_string(), texture);
-            } else if Self::MODEL_EXTENSIONS.iter().any(|&ext| ext == extension) {
+            if Self::TEXTURE_EXTENSIONS.iter().any(|&ext| file_name.ends_with(ext)) {
+                let texture = Self::create_bind_texture(file_data_arr, file_path_relative, device, queue, bind_group_layout);
+                textures.insert(file_path_relative.to_str().unwrap().to_string(), texture);
+            } else if Self::MODEL_EXTENSIONS.iter().any(|&ext| file_name.ends_with(ext)) {
                 let model = Self::create_model(
                     file_data_arr,
                     file_path_relative,
@@ -54,10 +58,14 @@ impl ResourceManager {
                     bind_group_layout,
                 );
                 models.insert(file_path_relative.to_str().unwrap().to_string(), model);
+            } else if Self::ATLAS_EXTENSIONS.iter().any(|&ext| file_name.ends_with(ext)) {
+                atlas_images.push((file_path_relative.to_str().unwrap().to_string(), file_data));
             }
         }
 
-        Self { textures, models }
+        let texture_atlas = Self::stitch_textures(device, queue, bind_group_layout, atlas_images);
+
+        Self { textures, models, texture_atlas }
     }
 
     fn create_bind_texture(
@@ -112,7 +120,6 @@ impl ResourceManager {
             },
             |p| {
                 let path = root_directory.join(p);
-                println!("{:?}", path);
                 let mat_text = fs::read_to_string(path).unwrap();
                 tobj::load_mtl_buf(&mut BufReader::new(Cursor::new(mat_text)))
             },
@@ -278,6 +285,78 @@ impl ResourceManager {
         Model { meshes, materials }
     }
 
+    pub fn stitch_textures(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture_bind_group_layout: &wgpu::BindGroupLayout,
+        textures: Vec<(String, Vec<u8>)>
+    ) -> TextureAtlas {
+        let textures = textures.iter().map(|(name, data)| {
+            let img = image::load_from_memory(data).unwrap();
+            let rgba = img.to_rgba8();
+            let dimensions = img.dimensions();
+            if !(dimensions.0 * dimensions.1).is_power_of_two() {
+                panic!("Texture dimensions must be a power of two");
+            }
+            if dimensions.0 != dimensions.1 {
+                panic!("Texture dimensions must be square");
+            }
+            (name, rgba, dimensions)
+        }).collect::<Vec<_>>();
+
+        let (largest_w, largest_h) = textures.iter().fold((0, 0), |(lw, lh), (_, _, (w, h))| {
+            (lw.max(*w), lh.max(*h))
+        });
+
+        let ratio = largest_w as f32 / largest_h as f32;
+        let cols_f32 = ((textures.len() as f32).sqrt() / ratio.sqrt()).ceil() as f32;
+        let rows_f32 = (textures.len() as f32 / cols_f32).ceil() as f32;
+        let cols = cols_f32 as u32;
+        let rows = rows_f32 as u32;
+        
+        let mut atlas = image::RgbaImage::new(
+            largest_w * cols, 
+            largest_h * rows,
+        );
+        let mut cells = HashMap::new();
+
+        for (i, tex) in textures.iter().enumerate() {
+            let (name, img, _) = tex;
+            let (col, row) = ((i as f32 % cols_f32) as u32, (i as f32 / cols_f32).floor() as u32);
+
+            // scale the texture to the largest texture size
+            let img = image::imageops::resize(img, largest_w, largest_h, image::imageops::FilterType::Nearest);
+
+            let (x, y) = (col * largest_w, row * largest_h);
+            atlas.copy_from(&img, x, y).unwrap();
+
+            let cell = CellPosition { x: col, y: row };
+            cells.insert(name.to_string(), cell);
+        };
+
+        let processed_atlas = image::DynamicImage::ImageRgba8(atlas);
+        let texture = Texture::from_image(device, queue, &processed_atlas, Some("atlas"), false).unwrap();
+
+        let material = Material::new(
+            device,
+            queue,
+            "atlas",
+            Some(texture),
+            None,
+            None,
+            texture_bind_group_layout,
+        );
+
+        TextureAtlas {
+            material,
+            width: largest_w * cols,
+            height: largest_h * rows,
+            cell_width: largest_w,
+            cell_height: largest_h,
+            cells,
+        }
+    }
+
     pub fn get_texture(&self, texture_name: &String) -> Option<&RegisteredTexture> {
         self.textures.get(texture_name)
     }
@@ -285,4 +364,39 @@ impl ResourceManager {
     pub fn get_model(&self, model_name: &String) -> Option<&Model> {
         self.models.get(model_name)
     }
+
+    pub fn get_atlas(&self) -> &TextureAtlas {
+        &self.texture_atlas
+    }
+
+}
+
+pub struct TextureAtlas {
+    pub material: Material,
+    pub width: u32,
+    pub height: u32,
+    pub cell_width: u32,
+    pub cell_height: u32,
+    pub cells: HashMap<String, CellPosition>,
+}
+
+impl TextureAtlas {
+    pub fn absolute_uv_cell(&self, cell: &CellPosition, u: f32, v: f32) -> (f32, f32) {
+        let x = cell.x as f32 * self.cell_width as f32 / self.width as f32;
+        let y = cell.y as f32 * self.cell_height as f32 / self.height as f32;
+        let w = self.cell_width as f32 / self.width as f32;
+        let h = self.cell_height as f32 / self.height as f32;
+        
+        (x + u * w, y + v * h)
+    }
+
+    pub fn absolute_uv_tex(&self, texture_name: &String, u: f32, v: f32) -> Option<(f32, f32)> {
+        let cell = self.cells.get(texture_name)?;
+        Some(self.absolute_uv_cell(cell, u, v))
+    }
+}
+
+pub struct CellPosition {
+    x: u32,
+    y: u32,
 }

@@ -20,7 +20,7 @@ use model::{DrawLight, DrawModel, ModelVertex, Vertex};
 use resources::ResourceManager;
 use texture::Texture;
 
-use crate::voxel::chunk::Chunk;
+use crate::voxel::chunk::{self, Chunk, ChunkManager, ChunkState, LoadedChunk};
 
 const NUM_INSTANCES_PER_ROW: u32 = 10;
 const INSTANCE_DISPLACEMENT: Vector3<f32> = Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
@@ -60,8 +60,7 @@ struct State {
     camera_bind_group: wgpu::BindGroup,
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
-    chunk: Chunk,
-    chunk_model: model::Model,
+    chunk_manager: ChunkManager,
 }
 struct Instance {
     position: Vector3<f32>,
@@ -137,7 +136,7 @@ impl State {
 
         // instance is the main interface with wgpu, use this to create all other stuff
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends: wgpu::Backends::VULKAN,
             ..Default::default()
         });
 
@@ -426,21 +425,7 @@ impl State {
             }
         );
 
-        let chunk = Chunk::new_plane(0);
-        let chunk_mesh = chunk.create_mesh(&device, &queue, (0, 0));
-        let chunk_material = model::Material::new(
-            &device,
-            &queue,
-            "chunk_material",
-            Some(Texture::from_color(&device, &queue, &Color::GREEN, "green").unwrap()),
-            None,
-            None,
-            &texture_bind_group_layout,
-        );
-        let chunk_model = model::Model {
-            meshes: vec![chunk_mesh],
-            materials: vec![chunk_material],
-        };
+        let chunk_manager = ChunkManager::new(4);
 
         Self {
             surface,
@@ -464,8 +449,7 @@ impl State {
             camera_bind_group,
             instances,
             instance_buffer,
-            chunk,
-            chunk_model,
+            chunk_manager,
         }
     }
 
@@ -547,7 +531,6 @@ impl State {
             });
 
             let model = &self.resource_manager.get_model(&String::from("cube.obj")).unwrap();
-            let chunk_model = &self.chunk_model;
 
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
@@ -559,7 +542,19 @@ impl State {
             );
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.draw_model_instanced(chunk_model, 0..self.instances.len() as u32, &self.camera_bind_group, &self.light_bind_group);
+
+            self.chunk_manager.generate_chunk_meshes(&self.device, &self.queue, self.resource_manager.get_atlas());
+            for chunk_state in self.chunk_manager.get_all_chunks() {
+                if let ChunkState::Loaded(LoadedChunk::MeshGenerated { chunk: _, mesh }) = chunk_state {
+                    render_pass.draw_mesh(
+                        mesh,
+                        &self.resource_manager.get_atlas().material,
+                        &self.camera_bind_group,
+                        &self.light_bind_group
+                    );
+                }
+                
+            }
         } // extra block tells borrower to drop any borrows, begin_render_pass borrows encoder, so to finish, we need to drop it
 
         // finish the command buffer and SEND

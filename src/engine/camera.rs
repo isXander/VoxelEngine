@@ -210,7 +210,6 @@ impl CameraController for FreeFlyController {
         camera.yaw -= Rad(self.look_left * self.rotate_speed * delta_time);
         camera.pitch += Rad(self.look_up * self.rotate_speed * delta_time);
         camera.pitch -= Rad(self.look_down * self.rotate_speed * delta_time);
-        println!("yaw: {}, pitch: {}", camera.yaw.0, camera.pitch.0);
     }
 }
 
