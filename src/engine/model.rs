@@ -130,6 +130,11 @@ impl Material {
     }
 }
 
+pub struct MeshData {
+    pub vertices: Vec<ModelVertex>,
+    pub indices: Vec<u32>,
+}
+
 pub struct Mesh {
     pub name: String,
     pub vertex_buffer: wgpu::Buffer,
@@ -139,7 +144,7 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    pub fn new(
+    pub fn from_raw(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         name: &str,
@@ -164,6 +169,34 @@ impl Mesh {
             vertex_buffer,
             index_buffer,
             num_elements: indices.len() as u32,
+            material,
+        }
+    }
+
+    pub fn from_data(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        name: &str,
+        mesh_data: &MeshData,
+        material: usize,
+    ) -> Self {
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{} Vertex Buffer", name)),
+            contents: bytemuck::cast_slice(&mesh_data.vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{} Index Buffer", name)),
+            contents: bytemuck::cast_slice(&mesh_data.indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Self {
+            name: String::from(name),
+            vertex_buffer,
+            index_buffer,
+            num_elements: mesh_data.indices.len() as u32,
             material,
         }
     }

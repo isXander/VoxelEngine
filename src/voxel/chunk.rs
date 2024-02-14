@@ -1,9 +1,10 @@
-use std::{collections::{HashMap, VecDeque}, hash::Hash, usize, vec};
+use std::{collections::{HashMap, VecDeque}, hash::Hash, sync::{mpsc::{Receiver, Sender}, Arc, Mutex}, usize, vec};
 use bytemuck::cast_box;
 use enum_map::{enum_map, EnumMap};
 use lazy_static::lazy_static;
 use ndarray::{Array3, ArrayBase};
 use noise::{NoiseFn, Perlin, Seedable};
+use threadpool::ThreadPool;
 
 use crate::engine;
 use std::iter::Iterator;
@@ -67,13 +68,13 @@ impl Chunk {
     }
 
     pub fn new_heightmap<F>(sampler: F) -> Self 
-    where F: Fn(usize, usize) -> usize {
+    where F: Fn(f32, f32) -> f32 {
         let mut chunk = Self::new_empty();
 
         for x in 0..16 {
             for z in 0..16 {
-                let y = sampler(x, z);
-                for y in 0..y {
+                let y = sampler(x as f32, z as f32);
+                for y in 0..y.floor() as usize {
                     chunk.set_voxel(x, y, z, Voxel::create_default_type(VoxelType::Grass));
                 }
             }
@@ -96,11 +97,9 @@ impl Chunk {
 
     pub fn create_mesh(
         &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
         chunk_pos: (i32, i32),
         texture_atlas: &engine::resources::TextureAtlas,
-    ) -> engine::model::Mesh {
+    ) -> engine::model::MeshData {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
 
@@ -148,16 +147,10 @@ impl Chunk {
             }
         };
 
-        // println!("starting indices");
-        // let mut unique_verts = vertices.clone();
-        // unique_verts.dedup();
-        // for vert in vertices.iter() {
-        //     indices.push(unique_verts.iter()
-        //         .position(|v| v == vert).unwrap() as u32);
-        // }
-        // println!("ending indicies");
-
-        engine::model::Mesh::new(device, queue, format!("Chunk Mesh {},{}", chunk_pos.0, chunk_pos.1).as_str(), &vertices, &indices, 0)
+        engine::model::MeshData {
+            vertices,
+            indices,
+        }
     }
 }
 
@@ -301,17 +294,24 @@ pub struct ChunkManager {
     chunks: HashMap<i64, ChunkState>,
     center_chunk: (i32, i32),
     render_distance: usize,
+    thread_pool: ThreadPool,
+    chunk_thread_sender: Sender<(i64, ChunkState)>,
+    chunk_thread_receiver: Receiver<(i64, ChunkState)>,
 }
 
 impl ChunkManager {
-    pub fn new(render_distance: usize) -> Self {
-        let mut chunks = HashMap::new();
-        Self::fill_map_renderdistance(&mut chunks, (0, 0), render_distance);
+    pub fn new(render_distance: usize, workers: usize) -> Self {
+        let chunks = HashMap::new();
+        let thread_pool = ThreadPool::new(workers);
+        let (chunk_thread_sender, chunk_thread_receiver) = std::sync::mpsc::channel();
 
         Self {
             chunks,
             center_chunk: (0, 0),
             render_distance,
+            thread_pool,
+            chunk_thread_sender,
+            chunk_thread_receiver,
         }
     }
 
@@ -331,7 +331,7 @@ impl ChunkManager {
         self.get_chunk_mut(self.center_chunk.0, self.center_chunk.1)
     }
 
-    pub fn set_center_chunk(&mut self, x: i32, z: i32) {
+    pub fn set_center_chunk(&mut self, x: i32, z: i32, texture_atlas: &engine::resources::TextureAtlas) {
         if self.center_chunk == (x, z) {
             return;
         }
@@ -342,7 +342,8 @@ impl ChunkManager {
         let mut to_remove = Vec::new();
         for coords in self.chunks.keys().into_iter() {
             let (cx, cz) = Self::unpack_coordinates(*coords);
-            if (cx - x).abs() > self.render_distance as i32 || (cz - z).abs() > self.render_distance as i32 {
+            let distance = ((cx - x).pow(2) + (cz - z).pow(2)) as f32;
+            if distance.sqrt() > self.render_distance as f32 {
                 to_remove.push(*coords);
             }
         }
@@ -351,19 +352,17 @@ impl ChunkManager {
         }
 
         // load all chunks within render distance
-        Self::fill_map_renderdistance(&mut self.chunks, self.center_chunk, self.render_distance)
+        self.fill_map_renderdistance(texture_atlas);
     }
 
-    pub fn generate_chunk_meshes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, texture_atlas: &engine::resources::TextureAtlas) {
+    pub fn upload_chunk_meshes(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, texture_atlas: &engine::resources::TextureAtlas) {
         let total_chunks = self.chunks.len();
 
         for (i, (coords, chunk_state)) in self.chunks.iter_mut().enumerate() {
             let chunk_pos = Self::unpack_coordinates(*coords);
-            if let ChunkState::Loaded(LoadedChunk::NoMesh { chunk }) = chunk_state {
-                let mesh = chunk.create_mesh(device, queue, chunk_pos, texture_atlas);
-                *chunk_state = ChunkState::Loaded(LoadedChunk::MeshGenerated { chunk: chunk.clone(), mesh });
-
-                println!("Loaded chunk {}/{}", i, total_chunks);
+            if let ChunkState::Loaded(LoadedChunk::MeshCreated { chunk, mesh_data }) = chunk_state {
+                let mesh = engine::model::Mesh::from_data(device, queue, format!("Chunk Mesh {},{}", chunk_pos.0, chunk_pos.1).as_str(), mesh_data, 0);
+                *chunk_state = ChunkState::Loaded(LoadedChunk::MeshUploaded { chunk: chunk.clone(), mesh });
             }
         }
     }
@@ -376,24 +375,59 @@ impl ChunkManager {
         (x.floor() as i32 / 16, z.floor() as i32 / 16)
     }
 
-    fn fill_map_renderdistance(chunks: &mut HashMap<i64, ChunkState>, center_chunk: (i32, i32), render_distance: usize) {
+    fn fill_map_renderdistance(&mut self, texture_atlas: &engine::resources::TextureAtlas) {
         let perlin = Perlin::new(1);
+        let render_distance = self.render_distance as i32;
 
-        for cx in (center_chunk.0 - render_distance as i32)..(center_chunk.0 + render_distance as i32) {
-            for cz in (center_chunk.1 - render_distance as i32)..(center_chunk.1 + render_distance as i32) {
-                if !chunks.contains_key(&Self::pack_coordinates(cx, cz)) {
-                    println!("{}", perlin.get([42.4, 28.9]));
-                    // let state = ChunkState::LoadScheduled;
-                    // for now lets block the main thread
+        // fill the map with chunks within render distance, in a circle around the center chunk
+        // make sure to use pi for circularity
+        // use euclidean tile-space distance to determine if a chunk is within render distance
+        for x in -render_distance as i32..=render_distance as i32 {
+            for z in -render_distance as i32..=render_distance as i32 {
+                let chunk_x = self.center_chunk.0 + x;
+                let chunk_z = self.center_chunk.1 + z;
+                let distance = (x.pow(2) + z.pow(2)) as f32;
+                if distance.sqrt() > render_distance as f32 {
+                    continue;
+                }
+
+                match self.chunks.get(&Self::pack_coordinates(chunk_x, chunk_z)) {
+                    Some(ChunkState::Loaded(_)) => continue,
+                    Some(ChunkState::LoadScheduled) => continue,
+                    Some(ChunkState::Loading) => continue,
+                    Some(ChunkState::Failed) => continue,
+                    None => (),
+                }
+
+                self.chunks.insert(Self::pack_coordinates(chunk_x, chunk_z), ChunkState::LoadScheduled);
+                let sender = self.chunk_thread_sender.clone();
+
+                self.thread_pool.execute(move || {
+                    sender.send((Self::pack_coordinates(chunk_x, chunk_z), ChunkState::Loading)).unwrap();
+
+                    let chunk = Chunk::new_heightmap(|vx, vz| {
+                        let scale = 100.0;
+                        let noise = (perlin.get([((chunk_x * 16) as f64 + vx as f64) / scale + 0.5, ((chunk_z * 16) as f64 + vz as f64) / scale + 0.5]) + 1.0) * 40.0;
+                        noise as f32
+                    });
+                    let mesh_data = chunk.create_mesh((chunk_x, chunk_z), texture_atlas);
+
                     let state = ChunkState::Loaded(
-                        LoadedChunk::NoMesh { 
-                            chunk: Chunk::new_heightmap(|x, z| (perlin.get([cx as f64 * x as f64 * 100.0, cz as f64 * z as f64 * 100.0]) + 1.0 * 12.0) as usize) 
-                        }
+                        LoadedChunk::MeshCreated {
+                            chunk,
+                            mesh_data,
+                        },
                     );
 
-                    chunks.insert(Self::pack_coordinates(cx, cz), state);
-                }
+                    sender.send((Self::pack_coordinates(chunk_x, chunk_z), state)).unwrap();
+                });
             }
+        }
+    }
+
+    pub fn receive_generated_chunks(&mut self) {
+        while let Ok((coords, state)) = self.chunk_thread_receiver.try_recv() {
+            self.chunks.insert(coords, state);
         }
     }
 
@@ -416,6 +450,6 @@ pub enum ChunkState {
 }
 
 pub enum LoadedChunk {
-    MeshGenerated { chunk: Chunk, mesh: engine::model::Mesh },
-    NoMesh { chunk: Chunk },
+    MeshUploaded { chunk: Chunk, mesh: engine::model::Mesh },
+    MeshCreated { chunk: Chunk, mesh_data: engine::model::MeshData },
 }

@@ -5,7 +5,7 @@ pub mod camera;
 
 use std::mem;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use cgmath::{Deg, InnerSpace, Matrix3, Matrix4, Point3, Quaternion, Vector3, Zero};
 use cgmath::prelude::*;
 use wgpu::{include_wgsl, Color, PresentMode};
@@ -136,7 +136,7 @@ impl State {
 
         // instance is the main interface with wgpu, use this to create all other stuff
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
+            backends: wgpu::Backends::all(),
             ..Default::default()
         });
 
@@ -299,7 +299,7 @@ impl State {
         );
 
         let camera = Camera::new(
-            Point3::new(0.0, 2.0, -5.0),
+            Point3::new(0.0, 24.0, -5.0),
             Deg(90.0),
             Deg(-15.0),
         );
@@ -310,7 +310,7 @@ impl State {
             0.1,
             100.0,
         );
-        let camera_controller = FreeFlyController::new(6.0, 2.0);
+        let camera_controller = FreeFlyController::new(20.0, 2.0);
         let mut camera_uniform = CameraUniform::new();
         camera_uniform.update_view_proj(&camera, &projection);
 
@@ -425,7 +425,7 @@ impl State {
             }
         );
 
-        let chunk_manager = ChunkManager::new(4);
+        let chunk_manager = ChunkManager::new(8, 8);
 
         Self {
             surface,
@@ -485,6 +485,12 @@ impl State {
 
         self.camera_controller.update_camera(&mut self.camera, delta_time);
         self.camera_uniform.update_view_proj(&self.camera, &self.projection);
+
+        let (chunk_x, chunk_z) = ChunkManager::pos_to_chunk_coords(self.camera.position.x, self.camera.position.z);
+        self.chunk_manager.set_center_chunk(chunk_x, chunk_z, self.resource_manager.get_atlas());
+
+        self.chunk_manager.receive_generated_chunks();
+
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
 
@@ -543,9 +549,10 @@ impl State {
 
             render_pass.set_pipeline(&self.render_pipeline);
 
-            self.chunk_manager.generate_chunk_meshes(&self.device, &self.queue, self.resource_manager.get_atlas());
+            self.chunk_manager.upload_chunk_meshes(&self.device, &self.queue, self.resource_manager.get_atlas());
+
             for chunk_state in self.chunk_manager.get_all_chunks() {
-                if let ChunkState::Loaded(LoadedChunk::MeshGenerated { chunk: _, mesh }) = chunk_state {
+                if let ChunkState::Loaded(LoadedChunk::MeshUploaded { chunk: _, mesh }) = chunk_state {
                     render_pass.draw_mesh(
                         mesh,
                         &self.resource_manager.get_atlas().material,
@@ -553,7 +560,6 @@ impl State {
                         &self.light_bind_group
                     );
                 }
-                
             }
         } // extra block tells borrower to drop any borrows, begin_render_pass borrows encoder, so to finish, we need to drop it
 
