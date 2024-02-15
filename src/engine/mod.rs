@@ -2,18 +2,19 @@ pub mod texture;
 pub mod model;
 pub mod resources;
 pub mod camera;
+mod shader_preprocess;
 
 use std::mem;
 use std::path::Path;
 use std::sync::Arc;
-use cgmath::{Deg, Matrix3, Matrix4, Point3, Quaternion, Vector3};
-use cgmath::prelude::*;
+use nalgebra::{Matrix3, Matrix4, Point3, Quaternion, Rotation3, Unit, UnitQuaternion, Vector3};
 use wgpu::{include_wgsl, PresentMode};
 use wgpu::util::DeviceExt;
 use winit::{event::*, event_loop::EventLoop, window::WindowBuilder};
 use winit::event_loop::EventLoopWindowTarget;
 use winit::keyboard::Key::Named;
-use winit::keyboard::NamedKey;
+use winit::keyboard::{KeyCode, NamedKey};
+use winit::keyboard::PhysicalKey::Code;
 use winit::window::Window;
 use camera::{Camera, CameraUniform, CameraController, FreeFlyController, Projection};
 use model::{DrawLight, DrawModel, ModelVertex, Vertex};
@@ -21,6 +22,8 @@ use resources::ResourceManager;
 use texture::Texture;
 
 use crate::voxel::chunk::{self, Chunk, ChunkManager, ChunkState, LoadedChunk};
+use crate::voxel::math::raycast;
+use crate::voxel::voxel;
 
 // The coordinate system in Wgpu is based on DirectX and Metal's coordinate systems.
 // That means that in normalized device coordinates (opens new window),
@@ -49,6 +52,7 @@ struct State {
     light_bind_group: wgpu::BindGroup,
     light_render_pipeline: wgpu::RenderPipeline,
     resource_manager: ResourceManager,
+    shader_preprocessor: shader_preprocess::ShaderPreprocessor,
     camera: Camera,
     projection: Projection,
     camera_controller: FreeFlyController,
@@ -61,7 +65,7 @@ struct State {
 }
 struct Instance {
     position: Vector3<f32>,
-    rotation: Quaternion<f32>,
+    rotation: UnitQuaternion<f32>,
 }
 
 #[repr(C)]
@@ -73,7 +77,7 @@ struct InstanceRaw {
 
 impl Instance {
     fn to_raw(&self) -> InstanceRaw {
-        let model = Matrix4::from_translation(self.position) * Matrix4::from(self.rotation);
+        let model = Matrix4::new_translation(&self.position) * Matrix4::from(self.rotation);
         InstanceRaw {
             model: model.into(),
             normal: Matrix3::from(self.rotation).into(),
@@ -250,10 +254,12 @@ impl State {
                 });
 
         let light_uniform = LightUniform {
-            position: [500.0, 300.0, 500.0],
-            _padding: 0,
+            position: [0.0, 70.0, 0.0],
+            _padding1: 0.0,
             color: [1.0, 1.0, 1.0],
-            _padding2: 0,
+            intensity: 1.0,
+            range: 200.0,
+            _padding2: [0.0; 3],
         };
 
         // we'll want to update our light's position, so COPY_DST
@@ -297,15 +303,15 @@ impl State {
 
         let camera = Camera::new(
             Point3::new(20.0, 50.0, 20.0),
-            Deg(90.0),
-            Deg(-15.0),
+            90.0_f32.to_radians(),
+            -15.0_f32.to_radians(),
         );
         let projection = Projection::new(
             config.width,
             config.height,
-            Deg(45.0),
+            70.0,
             0.1,
-            100.0,
+            1000.0,
         );
         let camera_controller = FreeFlyController::new(200.0, 2.0);
         let mut camera_uniform = CameraUniform::new();
@@ -360,8 +366,11 @@ impl State {
                 push_constant_ranges: &[],
             });
 
+        let mut shader_preprocessor = shader_preprocess::ShaderPreprocessor::new(Path::new("./res/shaders"));
+
         let render_pipeline = {
-            let shader = include_wgsl!("shaders/shader.wgsl");
+            let shader = shader_preprocessor.get_or_compile_shader("shader.wgsl", &device);
+
             create_render_pipeline(
                 &device,
                 &render_pipeline_layout,
@@ -379,7 +388,7 @@ impl State {
                 bind_group_layouts: &[&camera_bind_group_layout, &light_bind_group_layout],
                 push_constant_ranges: &[],
             });
-            let shader = include_wgsl!("shaders/light.wgsl");
+            let shader = shader_preprocessor.get_or_compile_shader("light.wgsl", &device);
 
             create_render_pipeline(
                 &device,
@@ -410,7 +419,8 @@ impl State {
         // }).collect::<Vec<_>>();
         let instances = vec![Instance {
             position: Vector3::new(0.0, 0.0, 0.0),
-            rotation: Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), Deg(0.0)),
+            rotation: UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.0)
+            //rotation: Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), Deg(0.0)),
         }];
 
         let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
@@ -438,6 +448,7 @@ impl State {
             light_buffer,
             light_bind_group,
             light_render_pipeline,
+            shader_preprocessor,
             render_pipeline,
             resource_manager,
             camera,
@@ -468,24 +479,64 @@ impl State {
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
-        self.camera_controller.process_input(event)
+        if self.camera_controller.process_input(event) {
+            return true;
+        }
+
+        match event {
+            WindowEvent::KeyboardInput { event, .. } if event.state == winit::event::ElementState::Pressed => {
+                match event.physical_key {
+                    Code(KeyCode::Space) => {
+                        let raycast_result = raycast(
+                            &self.camera.position.coords,
+                            &self.camera.direction().into(),
+                            100.0,
+                            |pos| {
+                                self.chunk_manager.get_voxel(pos.x, pos.y, pos.z).unwrap().voxel_type != voxel::Type::Air
+                            }
+                        );
+            
+                        if let Some(raycast_result) = raycast_result {
+                            println!("Raycast hit: {:?}", raycast_result);
+
+                            self.chunk_manager.set_voxel(
+                                raycast_result.position.x,
+                                raycast_result.position.y,
+                                raycast_result.position.z,
+                                voxel::Voxel::create_default_type(voxel::Type::Air)
+                            ).expect("could not set voxel");
+                            self.chunk_manager.remesh_chunk_and_neighbours(
+                                raycast_result.position.x / 16, 
+                                raycast_result.position.z / 16, 
+                                self.resource_manager.get_atlas()
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+
+        false
     }
 
     fn update(&mut self, delta_time: f32) {
         // update the light
         {
             let old_position: Vector3<_> = self.light_uniform.position.into();
-            self.light_uniform.position =
-                (Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), Deg(0.0))
-                    * old_position)
-                    .into();
+            // self.light_uniform.position =
+            //     (Quaternion::from_axis_angle((1.0, 0.0, 0.0).into(), Deg(1.0))
+            //         * old_position)
+            //         .into();
+            self.light_uniform.position = self.camera.position.coords.into();
             self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
         }
 
         self.camera_controller.update_camera(&mut self.camera, delta_time);
         self.camera_uniform.update_view_proj(&self.camera, &self.projection);
 
-        let (chunk_x, chunk_z) = ChunkManager::pos_to_chunk_coords(self.camera.position.x, self.camera.position.z);
+        let (chunk_x, chunk_z) = ChunkManager::pos_to_chunk_coords(self.camera.position.x.floor() as i32, self.camera.position.z.floor() as i32);
         self.chunk_manager.set_center_chunk(chunk_x, chunk_z);
         self.chunk_manager.fill_map_renderdistance();
 
@@ -576,21 +627,19 @@ fn create_render_pipeline(
     color_format: wgpu::TextureFormat,
     depth_format: Option<wgpu::TextureFormat>,
     vertex_layouts: &[wgpu::VertexBufferLayout],
-    shader: wgpu::ShaderModuleDescriptor,
+    shader: &wgpu::ShaderModule,
     name: &str,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(shader);
-
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(name),
         layout: Some(layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: "vs_main", // must specify the entrypoint
             buffers: vertex_layouts, // tells wgpu what type of vertices we want to pass to the shader
         },
         fragment: Some(wgpu::FragmentState { // technically optional
-            module: &shader,
+            module: shader,
             entry_point: "fs_main", // must specify the entrypoint
             targets: &[Some(wgpu::ColorTargetState { // tells wgpu what colour outputs to set up
                 format: color_format, // only need the one output for now, use surface's format so it's easy to copy
@@ -632,10 +681,17 @@ fn create_render_pipeline(
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct LightUniform {
-    position: [f32; 3],
-    _padding: u32,
-    color: [f32; 3],
-    _padding2: u32,
+    position: [f32; 3], // 12 bytes
+    _padding1: f32, // 16 bytes
+    // power of 2 complete ^^
+
+    color: [f32; 3], // 12 bytes
+    intensity: f32, // 16 bytes
+    // power of 2 complete ^^
+
+    range: f32, // 4 bytes
+    _padding2: [f32; 3], // 16 bytes
+    // power of 2 complete ^^
 }
 
 pub async fn run() {

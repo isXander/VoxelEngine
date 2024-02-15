@@ -1,3 +1,6 @@
+use std::slice::Iter;
+use nalgebra::Vector3;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Voxel {
     pub voxel_type: Type,
@@ -20,7 +23,7 @@ pub enum Type {
     Snow,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, enum_map::Enum)]
 pub enum Face {
     Top,
     Bottom,
@@ -54,5 +57,21 @@ impl Face {
             5 => Face::West,
             _ => unreachable!("Invalid face index"),
         }
+    }
+
+    pub fn offset_vector(&self) -> Vector3<i32> {
+        match self {
+            Face::Top => Vector3::new(0, 1, 0),
+            Face::Bottom => Vector3::new(0, -1, 0),
+            Face::North => Vector3::new(0, 0, -1),
+            Face::South => Vector3::new(0, 0, 1),
+            Face::East => Vector3::new(1, 0, 0),
+            Face::West => Vector3::new(-1, 0, 0),
+        }
+    }
+
+    pub fn iterator() -> Iter<'static, Face> {
+        static FACES: [Face; 6] = [Face::Top, Face::Bottom, Face::North, Face::South, Face::East, Face::West];
+        FACES.iter()
     }
 }

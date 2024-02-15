@@ -1,11 +1,11 @@
 use crate::engine::model::{Material, Mesh, Model, ModelVertex};
 use crate::engine::texture::{RegisteredTexture, Texture};
-use cgmath::{Vector2, Vector3};
+use nalgebra::{Vector2, Vector3};
 use image::{GenericImage, GenericImageView};
 use std::collections::HashMap;
-use std::fs;
+use std::{fs, io};
 use std::io::{BufReader, Cursor};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -33,17 +33,19 @@ impl ResourceManager {
 
         let mut atlas_images = Vec::new();
 
-        for path in paths {
-            let file = path.expect("cant get path").path();
+        let mut files = Vec::new();
+        Self::visit_dirs(directory, &mut files).expect("could not visit dirs");
 
-            let file_name = file
+        for path in files {
+            let file_name = path
                 .file_name()
                 .expect("cant get file name")
                 .to_str()
                 .expect("cant get file name as string");
-            let file_path_relative = file.strip_prefix(directory).expect("cant strip prefix");
+            let file_path_relative = path.strip_prefix(directory).expect("cant strip prefix");
+            println!("Loading file: {:?}", file_path_relative);
 
-            let file_data = fs::read(&file).expect("cant read data");
+            let file_data = fs::read(&path).expect("cant read data");
             let file_data_arr = file_data.as_slice();
 
             if Self::TEXTURE_EXTENSIONS.iter().any(|&ext| file_name.ends_with(ext)) {
@@ -67,6 +69,21 @@ impl ResourceManager {
         let texture_atlas = Arc::new(Self::stitch_textures(device, queue, bind_group_layout, atlas_images));
 
         Self { textures, models, texture_atlas }
+    }
+
+    fn visit_dirs(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
+        if dir.is_dir() {
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    Self::visit_dirs(&path, files)?;
+                } else {
+                    files.push(path);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn create_bind_texture(

@@ -1,5 +1,5 @@
-use cgmath::{InnerSpace, Matrix4, Point3, Rad, Vector3};
-use cgmath::prelude::*;
+use nalgebra::{Isometry3, Matrix4, Perspective3, Point3, Vector3};
+use nalgebra as na;
 use winit::event::WindowEvent;
 use winit::keyboard::KeyCode;
 use winit::keyboard::PhysicalKey::Code;
@@ -13,61 +13,67 @@ pub const OPENGL_TO_WGPU_MATRIX: Matrix4<f32> = Matrix4::new(
 
 pub struct Camera {
     pub position: Point3<f32>,
-    pub yaw: Rad<f32>,
-    pub pitch: Rad<f32>,
+    pub yaw: f32,
+    pub pitch: f32,
 }
 
 impl Camera {
     pub fn new<
         V: Into<Point3<f32>>,
-        Y: Into<Rad<f32>>,
-        P: Into<Rad<f32>>,
     >(
         position: V,
-        yaw: Y,
-        pitch: P,
+        yaw: f32,
+        pitch: f32,
     ) -> Self {
         Self {
             position: position.into(),
-            yaw: yaw.into(),
-            pitch: pitch.into(),
+            yaw,
+            pitch,
         }
     }
 
     pub fn calc_matrix(&self) -> Matrix4<f32> {
-        let (sin_pitch, cos_pitch) = self.pitch.0.sin_cos();
-        let (sin_yaw, cos_yaw) = self.yaw.0.sin_cos();
+        let direction = self.direction();
+        let up = Vector3::y();
 
-        Matrix4::look_to_rh(
-            self.position,
-            Vector3 {
-                x: cos_yaw * cos_pitch,
-                y: sin_pitch,
-                z: sin_yaw * cos_pitch,
-            }.normalize(),
-            Vector3::unit_y(),
-        )
+        Isometry3::look_at_rh(
+            &self.position,
+            &(self.position + direction),
+            &up,
+        ).to_homogeneous()
+
+    }
+
+    pub fn direction(&self) -> Vector3<f32> {
+        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
+
+        Vector3::new(
+            cos_yaw * cos_pitch,
+            sin_pitch,
+            sin_yaw * cos_pitch,
+        ).normalize()
     }
 }
 
 pub struct Projection {
     aspect: f32,
-    fov_y: Rad<f32>,
+    fov_y: f32,
     z_near: f32,
     z_far: f32,
 }
 
 impl Projection {
-    pub fn new<F: Into<Rad<f32>>>(
+    pub fn new(
         width: u32,
         height: u32,
-        fov_y: F,
+        fov_y: f32,
         z_near: f32,
         z_far: f32,
     ) -> Self {
         Self {
             aspect: width as f32 / height as f32,
-            fov_y: fov_y.into(),
+            fov_y: fov_y.to_radians(),
             z_near,
             z_far,
         }
@@ -78,7 +84,7 @@ impl Projection {
     }
 
     pub fn calc_matrix(&self) -> Matrix4<f32> {
-        OPENGL_TO_WGPU_MATRIX * cgmath::perspective(self.fov_y, self.aspect, self.z_near, self.z_far)
+        OPENGL_TO_WGPU_MATRIX * Matrix4::new_perspective(self.aspect, self.fov_y, self.z_near, self.z_far)
     }
 }
 
@@ -87,6 +93,7 @@ impl Projection {
 pub struct CameraUniform {
     view_position: [f32; 4],
     view_proj: [[f32; 4]; 4],
+    view_matrix: [[f32; 4]; 4],
 }
 
 impl CameraUniform {
@@ -94,11 +101,13 @@ impl CameraUniform {
         Self {
             view_position: [0.0; 4],
             view_proj: Matrix4::identity().into(),
+            view_matrix: Matrix4::identity().into(),
         }
     }
 
     pub fn update_view_proj(&mut self, camera: &Camera, projection: &Projection) {
-        self.view_position = camera.position.to_homogeneous().into();
+        self.view_position = camera.position.coords.push(1.0).into();
+        self.view_matrix = camera.calc_matrix().into();
         self.view_proj = (projection.calc_matrix() * camera.calc_matrix()).into();
     }
 }
@@ -179,15 +188,8 @@ impl CameraController for FreeFlyController {
 
     fn update_camera(&self, camera: &mut Camera, delta_time: f32) {
         // move camera relative to look direction
-        let (sin_yaw, cos_yaw) = camera.yaw.0.sin_cos();
-        let (sin_pitch, cos_pitch) = camera.pitch.0.sin_cos();
-
-        let forward = Vector3 {
-            x: cos_pitch * cos_yaw,
-            y: sin_pitch,
-            z: cos_pitch * sin_yaw,
-        }.normalize();
-        let right = forward.cross(Vector3::unit_y());
+        let forward = camera.direction();
+        let right = forward.cross(&Vector3::y_axis());
 
         if self.forward {
             camera.position += forward * self.move_speed * delta_time;
@@ -203,10 +205,13 @@ impl CameraController for FreeFlyController {
         }
 
         // rotate camera when arrow keys are pressed
-        camera.yaw += Rad(self.look_right * self.rotate_speed * delta_time);
-        camera.yaw -= Rad(self.look_left * self.rotate_speed * delta_time);
-        camera.pitch += Rad(self.look_up * self.rotate_speed * delta_time);
-        camera.pitch -= Rad(self.look_down * self.rotate_speed * delta_time);
+        camera.yaw += self.look_right * self.rotate_speed * delta_time;
+        camera.yaw -= self.look_left * self.rotate_speed * delta_time;
+        camera.pitch += self.look_up * self.rotate_speed * delta_time;
+        camera.pitch -= self.look_down * self.rotate_speed * delta_time;
+
+        // clamp pitch up and down
+        camera.pitch = camera.pitch.clamp(-1.5, 1.5);
     }
 }
 

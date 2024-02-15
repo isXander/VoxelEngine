@@ -8,7 +8,8 @@ var<uniform> camera: Camera;
 struct Light {
     position: vec3<f32>,
     color: vec3<f32>,
-    // padding can be ignored
+    intensity: f32,
+    range: f32,
 }
 @group(1) @binding(0)
 var<uniform> light: Light;

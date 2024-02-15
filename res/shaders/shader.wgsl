@@ -1,3 +1,5 @@
+#include "fog.wgsl"
+
 // Vertex Shader
 
 struct InstanceInput {
@@ -28,11 +30,13 @@ struct VertexOutput {
     @location(1) tangent_position: vec3<f32>,
     @location(2) tangent_light_position: vec3<f32>,
     @location(3) tangent_view_position: vec3<f32>,
+    @location(4) fog_distance: f32,
 };
 
 struct CameraUniform {
     view_pos: vec4<f32>,
     view_proj: mat4x4<f32>,
+    view_matrix: mat4x4<f32>,
 }
 @group(1) @binding(0) // need to specify the diff bind group
 var<uniform> camera: CameraUniform;
@@ -70,6 +74,7 @@ fn vs_main(
     out.tangent_position = tangent_matrix * world_position.xyz;
     out.tangent_view_position = tangent_matrix * camera.view_pos.xyz;
     out.tangent_light_position = tangent_matrix * light.position;
+    out.fog_distance = fog_distance_vert(model_matrix * camera.view_matrix, model.position, true);
     return out;
 }
 
@@ -89,6 +94,8 @@ var s_specular: sampler;
 struct Light {
     position: vec3<f32>,
     color: vec3<f32>,
+    intensity: f32,
+    range: f32,
 }
 @group(2) @binding(0)
 var<uniform> light: Light;
@@ -115,13 +122,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let view_dir = normalize(in.tangent_view_position - in.tangent_position);
     let half_dir = normalize(view_dir + light_dir);
 
-    let diffuse_strength = max(dot(tangent_normal, light_dir), 0.0);
-    let diffuse_color = light.color * diffuse_strength;
+    // light.intensity is the brightness of the light (0.0 - 1.0)
+    // light.range is the distance the light can travel
 
-    let specular_strength = pow(max(dot(tangent_normal, half_dir), 0.0), 32.0) * object_specular.x;
-    let specular_color = specular_strength * light.color;
+    let diffuse_strength = max(dot(tangent_normal, light_dir), 0.0) * light.intensity * (1.0 - clamp(length(in.tangent_light_position - in.tangent_position) / light.range, 0.0, 1.0));
+    let diffuse_color = light.color * diffuse_strength * (1 - ambient_strength);
 
-    let result = (ambient_color + diffuse_color/* + specular_color*/) * object_color.xyz;
+//    let specular_strength = pow(max(dot(tangent_normal, half_dir), 0.0), 32.0) * object_specular.x;
+//    let specular_color = specular_strength * light.color;
 
-    return vec4<f32>(result, object_color.a);
+    let lit_result = (ambient_color + diffuse_color/* + specular_color*/) * object_color.xyz;
+    var output = vec4<f32>(lit_result, object_color.a);
+    output = fog_linear_frag(output, in.fog_distance, 50.0, 250.0, vec4<f32>(0.1, 0.2, 0.3, 1.0));
+
+    return output;
 }
