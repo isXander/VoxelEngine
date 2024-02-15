@@ -21,6 +21,7 @@ noise = "0.8"
 threadpool = "1.8"
 ordered-float = "4.2"
 regex = "1.10"
+rapier3d = "0.18"
 
 [build-dependencies]
 anyhow = "1.0"

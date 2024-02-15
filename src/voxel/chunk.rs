@@ -6,6 +6,7 @@ use threadpool::ThreadPool;
 
 use crate::engine;
 use std::iter::Iterator;
+use rapier3d::prelude::{ColliderBuilder, Point};
 use crate::engine::model::{Mesh, MeshData};
 use crate::engine::resources::TextureAtlas;
 use crate::voxel::math::floor_div;
@@ -22,16 +23,6 @@ pub struct Chunk {
 
 impl Chunk {
     pub fn new_empty() -> Self {
-        // let mut voxels_1d = Vec::with_capacity(16 * 128 * 16);
-        // voxels_1d.resize_with(16 * 128 * 16, || Voxel::create_default_type(VoxelType::Air));
-
-        // let voxels_1d: Box<[Voxel; 16 * 128 * 16]> = voxels_1d.into_boxed_slice().try_into().unwrap();
-        // let voxels_3d: Box<[[[Voxel; 16]; 128]; 16]> = cast_box(voxels_1d).unwrap();
-
-        // Self {
-        //     voxels: cast_box(voxels_1d.into_boxed_slice()).unwrap(),
-        // }
-
         // TODO: this will break when Voxel becomes to large due to stack size, careful!
         let voxels = core::array::from_fn(|_| {
             core::array::from_fn(|_| {
@@ -635,7 +626,12 @@ impl ChunkManager {
                     match chunk_state {
                         ChunkState::Loaded(LoadedChunk::Stored { chunk }) | ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. }) => {
                             let mesh = Mesh::from_data(device, "Chunk Mesh", &mesh_data, 0);
-                            *chunk_state = ChunkState::Loaded(LoadedChunk::Meshed { chunk: chunk.clone(), mesh });
+
+                            let vertex_positions = mesh_data.vertices.iter().map(|v| Point::new(v.position[0], v.position[1], v.position[2])).collect::<Vec<_>>();
+                            let grouped_indices = mesh_data.indices.chunks(3).map(|c| [c[0], c[1], c[2]]).collect::<Vec<_>>();
+                            let collider_builder = ColliderBuilder::trimesh(vertex_positions, grouped_indices);
+
+                            *chunk_state = ChunkState::Loaded(LoadedChunk::Meshed { chunk: chunk.clone(), mesh, collider: collider_builder });
                         },
                         _ => eprintln!("Chunk mesh upload failed, chunk not found in map"),
                     }
@@ -728,6 +724,6 @@ pub enum ChunkState {
 }
 
 pub enum LoadedChunk {
-    Meshed { chunk: Arc<Chunk>, mesh: Mesh },
+    Meshed { chunk: Arc<Chunk>, mesh: Mesh, collider: ColliderBuilder },
     Stored { chunk: Arc<Chunk> },
 }
