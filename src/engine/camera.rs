@@ -150,8 +150,8 @@ impl PlayerController {
     }
 
     pub fn update(&self, position: &mut Position, direction: &mut LookDirection, delta_time: f32) {
-        let (sin_pitch, cos_pitch) = direction.pitch.0.sin_cos();
-        let (sin_yaw, cos_yaw) = direction.yaw.0.sin_cos();
+        let (sin_pitch, cos_pitch) = direction.pitch.as_radians().0.sin_cos();
+        let (sin_yaw, cos_yaw) = direction.yaw.as_radians().0.sin_cos();
 
         let forward = Vector3::new(
             cos_yaw * cos_pitch,
@@ -173,14 +173,16 @@ impl PlayerController {
             position.0 += right * self.move_speed * delta_time;
         }
 
+        let multiplier = 20.0;
+
         // rotate camera when arrow keys are pressed
-        direction.yaw.0 += self.look_right * self.rotate_speed * delta_time;
-        direction.yaw.0 -= self.look_left * self.rotate_speed * delta_time;
-        direction.pitch.0 += self.look_up * self.rotate_speed * delta_time;
-        direction.pitch.0 -= self.look_down * self.rotate_speed * delta_time;
+        direction.yaw.0 += self.look_right * self.rotate_speed * delta_time * multiplier;
+        direction.yaw.0 -= self.look_left * self.rotate_speed * delta_time * multiplier;
+        direction.pitch.0 += self.look_up * self.rotate_speed * delta_time * multiplier;
+        direction.pitch.0 -= self.look_down * self.rotate_speed * delta_time * multiplier;
 
         // clamp pitch up and down
-        direction.pitch.0 = direction.pitch.0.clamp(-1.5, 1.5);
+        //direction.pitch.0 = direction.pitch.0.clamp(-1.5, 1.5);
     }
 
     pub fn process_input(&mut self, event: &WindowEvent) -> bool {
@@ -318,15 +320,27 @@ impl CameraController for FreeFlyController {
         camera.pitch.0 -= self.look_down * self.rotate_speed * delta_time;
 
         // clamp pitch up and down
-        camera.pitch.0 = camera.pitch.0.clamp(-1.5, 1.5);
+        //camera.pitch.0 = camera.pitch.as_degrees().0.clamp(-90.0, 90.0).to_radians();
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub struct Deg<T: Float>(pub T);
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
 pub struct Rad<T: Float>(pub T);
+
+impl<T: Float> Deg<T> {
+    pub fn as_radians(&self) -> Rad<T> {
+        Rad(self.0.to_radians())
+    }
+}
+
+impl<T: Float> Rad<T> {
+    pub fn as_degrees(&self) -> Deg<T> {
+        Deg(self.0.to_degrees())
+    }
+}
 
 impl<T: Float> Into<Rad<T>> for Deg<T> {
     fn into(self) -> Rad<T> {

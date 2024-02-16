@@ -7,6 +7,7 @@ mod shader_preprocess;
 use std::mem;
 use std::path::Path;
 use std::sync::Arc;
+use itertools::Itertools;
 use nalgebra::{Matrix3, Matrix4, Point3, Quaternion, Rotation3, Unit, UnitQuaternion, Vector3};
 use wgpu::{include_wgsl, PresentMode};
 use wgpu::util::DeviceExt;
@@ -25,6 +26,9 @@ use crate::engine::camera::Deg;
 use crate::voxel::chunk::{self, Chunk, ChunkManager, ChunkState, LoadedChunk};
 use crate::voxel::math::raycast;
 use crate::voxel::voxel;
+use crate::world::player::BoundCameraMarker;
+use crate::world::scheduler::{self, WorldScheduler};
+use crate::world::setup;
 
 // The coordinate system in Wgpu is based on DirectX and Metal's coordinate systems.
 // That means that in normalized device coordinates (opens new window),
@@ -54,9 +58,8 @@ struct State {
     light_render_pipeline: wgpu::RenderPipeline,
     resource_manager: ResourceManager,
     shader_preprocessor: shader_preprocess::ShaderPreprocessor,
-    camera: Camera,
+    scheduler: WorldScheduler,
     projection: Projection,
-    camera_controller: FreeFlyController,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -138,7 +141,7 @@ impl State {
 
         // instance is the main interface with wgpu, use this to create all other stuff
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
+            backends: wgpu::Backends::VULKAN | wgpu::Backends::METAL,
             ..Default::default()
         });
 
@@ -302,11 +305,7 @@ impl State {
             &texture_bind_group_layout,
         );
 
-        let camera = Camera::new(
-            Point3::new(20.0, 50.0, 20.0),
-            Deg(90.0),
-            Deg(-15.0),
-        );
+    
         let projection = Projection::new(
             config.width,
             config.height,
@@ -314,9 +313,7 @@ impl State {
             0.1,
             1000.0,
         );
-        let camera_controller = FreeFlyController::new(200.0, 2.0);
         let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update_view_proj(&camera, &projection);
 
         let camera_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
@@ -436,6 +433,9 @@ impl State {
         println!("Using {} workers for chunk manager", available_parallelism);
         let chunk_manager = ChunkManager::new(32, available_parallelism);
 
+        
+        let scheduler = WorldScheduler::new();
+
         Self {
             surface,
             device,
@@ -451,9 +451,8 @@ impl State {
             shader_preprocessor,
             render_pipeline,
             resource_manager,
-            camera,
+            scheduler,
             projection,
-            camera_controller,
             camera_uniform,
             camera_buffer,
             camera_bind_group,
@@ -479,38 +478,36 @@ impl State {
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
-        if self.camera_controller.process_input(event) {
-            return true;
-        }
+        self.scheduler.run_input_stage(event);
 
         match event {
             WindowEvent::KeyboardInput { event, .. } if event.state == winit::event::ElementState::Pressed => {
                 match event.physical_key {
                     Code(KeyCode::Space) => {
-                        let raycast_result = raycast(
-                            &self.camera.position.coords,
-                            &self.camera.direction().into(),
-                            100.0,
-                            |pos| {
-                                self.chunk_manager.get_voxel(pos.x, pos.y, pos.z).unwrap().voxel_type != voxel::Type::Air
-                            }
-                        );
+                        // let raycast_result = raycast(
+                        //     &self.camera.position.coords,
+                        //     &self.camera.direction().into(),
+                        //     100.0,
+                        //     |pos| {
+                        //         self.chunk_manager.get_voxel(pos.x, pos.y, pos.z).unwrap().voxel_type != voxel::Type::Air
+                        //     }
+                        // );
             
-                        if let Some(raycast_result) = raycast_result {
-                            println!("Raycast hit: {:?}", raycast_result);
+                        // if let Some(raycast_result) = raycast_result {
+                        //     println!("Raycast hit: {:?}", raycast_result);
 
-                            self.chunk_manager.set_voxel(
-                                raycast_result.position.x,
-                                raycast_result.position.y,
-                                raycast_result.position.z,
-                                voxel::Voxel::create_default_type(voxel::Type::Air)
-                            ).expect("could not set voxel");
-                            self.chunk_manager.remesh_chunk_and_neighbours(
-                                raycast_result.position.x / 16, 
-                                raycast_result.position.z / 16, 
-                                self.resource_manager.get_atlas()
-                            );
-                        }
+                        //     self.chunk_manager.set_voxel(
+                        //         raycast_result.position.x,
+                        //         raycast_result.position.y,
+                        //         raycast_result.position.z,
+                        //         voxel::Voxel::create_default_type(voxel::Type::Air)
+                        //     ).expect("could not set voxel");
+                        //     self.chunk_manager.remesh_chunk_and_neighbours(
+                        //         raycast_result.position.x / 16, 
+                        //         raycast_result.position.z / 16, 
+                        //         self.resource_manager.get_atlas()
+                        //     );
+                        // }
                     }
                     _ => {}
                 }
@@ -529,16 +526,17 @@ impl State {
             //     (Quaternion::from_axis_angle((1.0, 0.0, 0.0).into(), Deg(1.0))
             //         * old_position)
             //         .into();
-            self.light_uniform.position = self.camera.position.coords.into();
             self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
         }
 
-        self.camera_controller.update_camera(&mut self.camera, delta_time);
-        self.camera_uniform.update_view_proj(&self.camera, &self.projection);
+        self.scheduler.run_update_stage(&mut self.chunk_manager, delta_time);
 
-        let (chunk_x, chunk_z) = ChunkManager::pos_to_chunk_coords(self.camera.position.x.floor() as i32, self.camera.position.z.floor() as i32);
-        self.chunk_manager.set_center_chunk(chunk_x, chunk_z);
-        self.chunk_manager.fill_map_renderdistance();
+        match self.scheduler.world.query::<(&Camera, &BoundCameraMarker)>().iter().at_most_one() {
+            Ok(Some((id, (camera, _)))) => {
+                self.camera_uniform.update_view_proj(camera, &self.projection);
+            },
+            _ => {}
+        }
 
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
@@ -700,6 +698,8 @@ pub async fn run() {
     let window = Arc::new(WindowBuilder::new().build(&event_loop).expect("cant create window"));
 
     let mut state = State::new(window).await;
+    setup(&mut state.scheduler);
+    state.scheduler.run_start_stage();
 
     //state.window.set_cursor_grab(CursorGrabMode::Locked).expect("Could not grab cursor");
 

@@ -1,75 +1,72 @@
-use hecs::World;
-use winit::event::WindowEvent;
+// use hecs::World;
+// use winit::event::WindowEvent;
 
-pub struct WorldScheduler {
-    pub world: World,
+// use crate::voxel::chunk::ChunkManager;
 
-    start_systems: Vec<fn(&mut World)>,
-    update_systems: Vec<fn(&mut World, &UpdateStage)>,
-    fixed_update_systems: Vec<fn(&mut World)>,
-    input_systems: Vec<fn(&mut World, &InputStage)>,
-}
+// use super::physics::PhysicsContext;
 
-impl WorldScheduler {
-    pub fn new() -> Self {
-        Self {
-            world: World::new(),
-            start_systems: Vec::new(),
-            update_systems: Vec::new(),
-            fixed_update_systems: Vec::new(),
-            input_systems: Vec::new(),
-        }
-    }
+// pub struct WorldScheduler {
+//     pub world: World,
 
-    pub fn add_start_systems(&mut self, systems: Vec<fn(&mut World)>) {
-        self.start_systems.extend(systems);
-    }
+//     start_systems: Vec<fn(&mut World, &mut Context)>,
+//     update_systems: Vec<fn(&mut World, &mut Context, &mut UpdateStage)>,
+//     fixed_update_systems: Vec<fn(&mut World, &mut Context)>,
+//     input_systems: Vec<fn(&mut World, &mut Context, &InputStage)>,
+// }
 
-    pub fn add_update_systems(&mut self, systems: Vec<fn(&mut World, &UpdateStage)>) {
-        self.update_systems.extend(systems);
-    }
+// impl WorldScheduler {
+//     pub fn new() -> Self {
+//         Self {
+//             world: World::new(),
+//             context,
+//             start_systems: Vec::new(),
+//             update_systems: Vec::new(),
+//             fixed_update_systems: Vec::new(),
+//             input_systems: Vec::new(),
+//         }
+//     }
 
-    pub fn add_fixed_update_systems(&mut self, systems: Vec<fn(&mut World)>) {
-        self.fixed_update_systems.extend(systems);
-    }
+//     pub fn add_start_systems(&mut self, systems: Vec<fn(&mut World, &mut Context)>) {
+//         self.start_systems.extend(systems);
+//     }
 
-    pub fn add_input_systems(&mut self, systems: Vec<fn(&mut World, &InputStage)>) {
-        self.input_systems.extend(systems);
-    }
+//     pub fn add_update_systems(&mut self, systems: Vec<fn(&mut World, &mut Context, &mut UpdateStage)>) {
+//         self.update_systems.extend(systems);
+//     }
 
-    // TODO: potentially just use bevy_ecs with a proper scheduler
-    pub fn run_start_stage(&mut self) {
-        for system in &self.start_systems {
-            system(&mut self.world);
-        }
-    }
+//     pub fn add_fixed_update_systems(&mut self, systems: Vec<fn(&mut World, &mut Context)>) {
+//         self.fixed_update_systems.extend(systems);
+//     }
 
-    pub fn run_update_stage(&mut self, delta_time: f32) {
-        let stage = UpdateStage { delta_time };
-        for system in &self.update_systems {
-            system(&mut self.world, &stage);
-        }
-    }
+//     pub fn add_input_systems(&mut self, systems: Vec<fn(&mut World, &mut Context, &InputStage)>) {
+//         self.input_systems.extend(systems);
+//     }
 
-    pub fn run_fixed_update_stage(&mut self) {
-        for system in &self.fixed_update_systems {
-            system(&mut self.world);
-        }
-    }
+//     // TODO: potentially just use bevy_ecs with a proper scheduler
+//     pub fn run_start_stage(&mut self) {
+//         for system in &self.start_systems {
+//             system(&mut self.world, &mut self.context);
+//         }
+//     }
 
-    pub fn run_input_stage(&mut self, event: &WindowEvent) {
-        let stage = InputStage { event };
-        for system in &self.input_systems {
-            system(&mut self.world, &stage);
-        }
-    }
-}
+//     pub fn run_update_stage(&mut self, chunk_manager: &mut ChunkManager, delta_time: f32) {
+//         let mut stage = UpdateStage { chunk_manager, delta_time };
+//         for system in &self.update_systems {
+//             system(&mut self.world, &mut self.context, &mut stage);
+//         }
+//     }
 
-pub struct StartStage;
-pub struct UpdateStage {
-    pub delta_time: f32,
-}
-pub struct FixedUpdateStage;
-pub struct InputStage<'a> {
-    pub event: &'a WindowEvent,
-}
+//     pub fn run_fixed_update_stage(&mut self) {
+//         for system in &self.fixed_update_systems {
+//             system(&mut self.world, &mut self.context);
+//         }
+//     }
+
+//     pub fn run_input_stage(&mut self, event: &WindowEvent) {
+//         let stage = InputStage { event };
+//         for system in &self.input_systems {
+//             system(&mut self.world, &mut self.context, &stage);
+//         }
+//     }
+// }
+

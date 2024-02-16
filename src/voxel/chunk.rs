@@ -6,7 +6,7 @@ use threadpool::ThreadPool;
 
 use crate::engine;
 use std::iter::Iterator;
-use rapier3d::{geometry::Collider, prelude::{ColliderBuilder, Point}};
+use rapier3d::{geometry::{Collider, SharedShape, TriMeshFlags}, prelude::{ColliderBuilder, Point}};
 use crate::engine::model::{Mesh, MeshData};
 use crate::engine::resources::TextureAtlas;
 use crate::voxel::math::floor_div;
@@ -605,6 +605,7 @@ impl ChunkManager {
         let texture_atlas = texture_atlas.clone();
 
         self.thread_pool.execute(move || {
+            let now = std::time::Instant::now();
             let mesh_data = chunk.create_mesh(
                 (chunk_x, chunk_z),
                 &neighbour_west,
@@ -613,13 +614,14 @@ impl ChunkManager {
                 &neighbour_south,
                 &texture_atlas
             );
+            println!("Mesh data: {:?}", now.elapsed().as_millis());
             let packed = Self::pack_coordinates(chunk_x, chunk_z);
 
             // create collider
             let vertex_positions = mesh_data.vertices.iter().map(|v| Point::new(v.position[0], v.position[1], v.position[2])).collect::<Vec<_>>();
             let grouped_indices = mesh_data.indices.chunks(3).map(|c| [c[0], c[1], c[2]]).collect::<Vec<_>>();
             let collider = ColliderBuilder::trimesh(vertex_positions, grouped_indices).build();
-
+            
             sender.send((packed, mesh_data, collider)).unwrap();
         });
     }
@@ -651,7 +653,7 @@ impl ChunkManager {
             _ => return,
         };
 
-        let neighbours = self.get_chunk_neighbours_exists(chunk_x, chunk_z).unwrap();
+        let neighbours = self.get_chunk_neighbours_exists(chunk_x, chunk_z).expect("Chunk neighbours not loaded yet");
 
         let [neighbour_west, neighbour_east, neighbour_north, neighbour_south] = neighbours;
 
