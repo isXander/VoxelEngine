@@ -22,6 +22,7 @@ threadpool = "1.8"
 ordered-float = "4.2"
 regex = "1.10"
 rapier3d = "0.18"
+hecs = "0.10"
 
 [build-dependencies]
 anyhow = "1.0"

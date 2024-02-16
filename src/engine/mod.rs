@@ -20,6 +20,7 @@ use camera::{Camera, CameraUniform, CameraController, FreeFlyController, Project
 use model::{DrawLight, DrawModel, ModelVertex, Vertex};
 use resources::ResourceManager;
 use texture::Texture;
+use crate::engine::camera::Deg;
 
 use crate::voxel::chunk::{self, Chunk, ChunkManager, ChunkState, LoadedChunk};
 use crate::voxel::math::raycast;
@@ -303,13 +304,13 @@ impl State {
 
         let camera = Camera::new(
             Point3::new(20.0, 50.0, 20.0),
-            90.0_f32.to_radians(),
-            -15.0_f32.to_radians(),
+            Deg(90.0),
+            Deg(-15.0),
         );
         let projection = Projection::new(
             config.width,
             config.height,
-            70.0,
+            Deg(70.0),
             0.1,
             1000.0,
         );

@@ -871,6 +871,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hecs"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08c827658bc76bcffa12334eeeb575d304c5a31b71cbabd16c5f3379a9aa68c7"
+dependencies = [
+ "hashbrown",
+ "spin",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2114,6 +2124,7 @@ dependencies = [
  "env_logger",
  "fs_extra",
  "glob",
+ "hecs",
  "image",
  "lazy_static",
  "log",
