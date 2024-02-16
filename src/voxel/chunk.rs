@@ -6,7 +6,7 @@ use threadpool::ThreadPool;
 
 use crate::engine;
 use std::iter::Iterator;
-use rapier3d::prelude::{ColliderBuilder, Point};
+use rapier3d::{geometry::Collider, prelude::{ColliderBuilder, Point}};
 use crate::engine::model::{Mesh, MeshData};
 use crate::engine::resources::TextureAtlas;
 use crate::voxel::math::floor_div;
@@ -320,8 +320,8 @@ pub struct ChunkManager {
     chunkgen_thread_sender: Sender<(u64, ChunkState)>,
     chunkgen_thread_receiver: Receiver<(u64, ChunkState)>,
 
-    chunkmesh_out_sender: Sender<(u64, MeshData)>,
-    chunkmesh_out_receiver: Receiver<(u64, MeshData)>,
+    chunkmesh_out_sender: Sender<(u64, MeshData, Collider)>,
+    chunkmesh_out_receiver: Receiver<(u64, MeshData, Collider)>,
 }
 
 impl ChunkManager {
@@ -615,23 +615,25 @@ impl ChunkManager {
             );
             let packed = Self::pack_coordinates(chunk_x, chunk_z);
 
-            sender.send((packed, mesh_data)).unwrap();
+            // create collider
+            let vertex_positions = mesh_data.vertices.iter().map(|v| Point::new(v.position[0], v.position[1], v.position[2])).collect::<Vec<_>>();
+            let grouped_indices = mesh_data.indices.chunks(3).map(|c| [c[0], c[1], c[2]]).collect::<Vec<_>>();
+            let collider = ColliderBuilder::trimesh(vertex_positions, grouped_indices).build();
+
+            sender.send((packed, mesh_data, collider)).unwrap();
         });
     }
 
     pub fn upload_chunk_meshes(&mut self, device: &wgpu::Device) {
-        while let Ok((coords, mesh_data)) = self.chunkmesh_out_receiver.try_recv() {
+        while let Ok((coords, mesh_data, collider)) = self.chunkmesh_out_receiver.try_recv() {
             match self.chunks.get_mut(&coords) {
                 Some(chunk_state) => {
                     match chunk_state {
                         ChunkState::Loaded(LoadedChunk::Stored { chunk }) | ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. }) => {
+                            // actually upload the mesh to the buffer on the main thread
                             let mesh = Mesh::from_data(device, "Chunk Mesh", &mesh_data, 0);
 
-                            let vertex_positions = mesh_data.vertices.iter().map(|v| Point::new(v.position[0], v.position[1], v.position[2])).collect::<Vec<_>>();
-                            let grouped_indices = mesh_data.indices.chunks(3).map(|c| [c[0], c[1], c[2]]).collect::<Vec<_>>();
-                            let collider_builder = ColliderBuilder::trimesh(vertex_positions, grouped_indices);
-
-                            *chunk_state = ChunkState::Loaded(LoadedChunk::Meshed { chunk: chunk.clone(), mesh, collider: collider_builder });
+                            *chunk_state = ChunkState::Loaded(LoadedChunk::Meshed { chunk: chunk.clone(), mesh, collider });
                         },
                         _ => eprintln!("Chunk mesh upload failed, chunk not found in map"),
                     }
@@ -724,6 +726,6 @@ pub enum ChunkState {
 }
 
 pub enum LoadedChunk {
-    Meshed { chunk: Arc<Chunk>, mesh: Mesh, collider: ColliderBuilder },
+    Meshed { chunk: Arc<Chunk>, mesh: Mesh, collider: Collider },
     Stored { chunk: Arc<Chunk> },
 }

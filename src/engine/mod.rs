@@ -419,8 +419,7 @@ impl State {
         // }).collect::<Vec<_>>();
         let instances = vec![Instance {
             position: Vector3::new(0.0, 0.0, 0.0),
-            rotation: UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.0)
-            //rotation: Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), Deg(0.0)),
+            rotation: UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.0),
         }];
 
         let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
@@ -602,7 +601,7 @@ impl State {
             self.chunk_manager.upload_chunk_meshes(&self.device);
 
             for chunk_state in self.chunk_manager.get_all_chunks() {
-                if let ChunkState::Loaded(LoadedChunk::Meshed { chunk: _, mesh }) = chunk_state {
+                if let ChunkState::Loaded(LoadedChunk::Meshed { mesh, .. }) = chunk_state {
                     render_pass.draw_mesh(
                         mesh,
                         &self.resource_manager.get_atlas().material,
