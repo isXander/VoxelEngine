@@ -1,20 +1,29 @@
-use std::collections::VecDeque;
+use crate::world::physics::components::{
+    Collider, ColliderComponents, RapierColliderHandle, RapierRigidBodyHandle, RigidBody,
+    RigidbodyComponents,
+};
+use crate::world::physics::context::{PhysicsConfig, PhysicsContext};
 use hecs::{Entity, World};
 use hecs_schedule::{CommandBuffer, Read, SubWorld, Write};
 use rapier3d::prelude as rapier;
-use crate::world::physics::components::{Collider, ColliderComponents, RapierColliderHandle, RapierRigidBodyHandle, RigidBody, RigidbodyComponents};
-use crate::world::physics::context::{PhysicsConfig, PhysicsContext};
-use crate::world::player::Position;
+use std::collections::VecDeque;
 
 pub fn system_physics_step(mut physics: Write<PhysicsContext>, config: Read<PhysicsConfig>) {
     physics.step(&config)
 }
 
-pub fn systems_physics_create_ordered(world: SubWorld<(ColliderComponents, RigidbodyComponents)>, mut cmd: Write<CommandBuffer>, mut physics: Write<PhysicsContext>) {
-    let mut cmd = &mut *cmd;
-    let mut physics = &mut *physics;
+pub fn systems_physics_create_ordered(
+    world: SubWorld<(ColliderComponents, RigidbodyComponents)>,
+    mut cmd: Write<CommandBuffer>,
+    mut physics: Write<PhysicsContext>,
+) {
+    let cmd = &mut *cmd;
+    let physics = &mut *physics;
 
-    for (id, (body, collider)) in &mut world.query::<(Option<RigidbodyComponents>, Option<ColliderComponents>)>().without::<&RapierRigidBodyHandle>() {
+    for (id, (body, collider)) in &mut world
+        .query::<(Option<RigidbodyComponents>, Option<ColliderComponents>)>()
+        .without::<&RapierRigidBodyHandle>()
+    {
         let body_handle = if let Some(body) = body {
             Some(create_body((id, body), physics))
         } else {
@@ -22,11 +31,14 @@ pub fn systems_physics_create_ordered(world: SubWorld<(ColliderComponents, Rigid
         };
 
         let collider_handle = if let Some(collider) = collider {
-            Some(create_collider((id, collider), physics, &body_handle.as_ref()))
+            Some(create_collider(
+                (id, collider),
+                physics,
+                &body_handle.as_ref(),
+            ))
         } else {
             None
         };
-
 
         if let Some(handle) = body_handle {
             cmd.insert_one(id, handle);
@@ -37,7 +49,10 @@ pub fn systems_physics_create_ordered(world: SubWorld<(ColliderComponents, Rigid
     }
 }
 
-fn create_body(entity: (Entity, RigidbodyComponents), physics: &mut PhysicsContext) -> RapierRigidBodyHandle {
+fn create_body(
+    entity: (Entity, RigidbodyComponents),
+    physics: &mut PhysicsContext,
+) -> RapierRigidBodyHandle {
     let (entity, (body, position)) = entity;
 
     // found all unregistered bodies
@@ -60,7 +75,11 @@ fn create_body(entity: (Entity, RigidbodyComponents), physics: &mut PhysicsConte
     RapierRigidBodyHandle(handle)
 }
 
-fn create_collider(entity: (Entity, ColliderComponents), physics: &mut PhysicsContext, new_body: &Option<&RapierRigidBodyHandle>) -> RapierColliderHandle {
+fn create_collider(
+    entity: (Entity, ColliderComponents),
+    physics: &mut PhysicsContext,
+    new_body: &Option<&RapierRigidBodyHandle>,
+) -> RapierColliderHandle {
     let (id, (collider, existing_body)) = entity;
     let body_handle = new_body.or(existing_body);
 
@@ -71,7 +90,10 @@ fn create_collider(entity: (Entity, ColliderComponents), physics: &mut PhysicsCo
     collider = collider.mass(1.0);
 
     let handle = if let Some(body_handle) = body_handle {
-        physics.colliders.insert_with_parent(collider, body_handle.0, &mut physics.bodies)
+        println!("Collider has body");
+        physics
+            .colliders
+            .insert_with_parent(collider, body_handle.0, &mut physics.bodies)
     } else {
         physics.colliders.insert(collider)
     };
@@ -80,12 +102,19 @@ fn create_collider(entity: (Entity, ColliderComponents), physics: &mut PhysicsCo
     RapierColliderHandle(handle)
 }
 
-pub fn systems_physics_remove_bodies(world: Read<World>, mut cmd: Write<CommandBuffer>, mut physics: Write<PhysicsContext>) {
+pub fn systems_physics_remove_bodies(
+    world: Read<World>,
+    mut cmd: Write<CommandBuffer>,
+    mut physics: Write<PhysicsContext>,
+) {
     let physics = &mut *physics;
 
     let mut to_remove = VecDeque::new();
 
-    for (entity, body_handle) in &mut world.query::<&RapierRigidBodyHandle>().without::<&RigidBody>() {
+    for (entity, body_handle) in &mut world
+        .query::<&RapierRigidBodyHandle>()
+        .without::<&RigidBody>()
+    {
         cmd.remove_one::<&RapierRigidBodyHandle>(entity);
         to_remove.push_back(body_handle.0);
     }

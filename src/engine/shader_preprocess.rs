@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::path::Path;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::collections::HashMap;
+use std::path::Path;
 
 pub struct ShaderPreprocessor {
     root_directory: &'static Path,
@@ -40,7 +40,11 @@ impl ShaderPreprocessor {
         self.compiled_shaders.get(name)
     }
 
-    pub fn get_or_compile_shader(&mut self, name: &str, device: &wgpu::Device) -> &wgpu::ShaderModule {
+    pub fn get_or_compile_shader(
+        &mut self,
+        name: &str,
+        device: &wgpu::Device,
+    ) -> &wgpu::ShaderModule {
         let path = &self.root_directory.join(name);
 
         if self.compiled_shaders.contains_key(name) {
@@ -70,7 +74,12 @@ impl ShaderPreprocessor {
         self.processed_shaders.get(name).unwrap()
     }
 
-    fn preprocess_shader(&mut self, unprocessed: String, name: &str, parent_directory: &Path) -> String {
+    fn preprocess_shader(
+        &mut self,
+        unprocessed: String,
+        name: &str,
+        parent_directory: &Path,
+    ) -> String {
         let mut processed = unprocessed.clone();
 
         let mut count = 0;
@@ -86,14 +95,18 @@ impl ShaderPreprocessor {
                     parent_directory.join(include_path)
                 };
 
-                let preprocessed_include = self.get_or_preprocess_shader(include_path, &include_full_path);
+                let preprocessed_include =
+                    self.get_or_preprocess_shader(include_path, &include_full_path);
 
                 processed = Self::include_shader(processed.clone(), preprocessed_include, i);
                 count += 1;
             }
         }
 
-        println!("Processed {} include directives for shader {}.", count, name);
+        println!(
+            "Processed {} include directives for shader {}.",
+            count, name
+        );
 
         processed
     }
@@ -112,5 +125,3 @@ impl ShaderPreprocessor {
         })
     }
 }
-
-

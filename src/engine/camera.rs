@@ -1,17 +1,14 @@
-use nalgebra::{Isometry3, Matrix4, Perspective3, Point3, Vector3};
+use crate::world::player::{LookDirection, Position};
 use nalgebra as na;
-use rapier3d::prelude as rapier;
+use nalgebra::{Isometry3, Matrix4, Perspective3, Point3, Vector3};
 use ordered_float::Float;
+use rapier3d::prelude as rapier;
 use winit::event::WindowEvent;
 use winit::keyboard::KeyCode;
 use winit::keyboard::PhysicalKey::Code;
-use crate::world::player::{LookDirection, Position};
 
 pub const OPENGL_TO_WGPU_MATRIX: Matrix4<f32> = Matrix4::new(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.5,
-    0.0, 0.0, 0.0, 1.0,
+    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0,
 );
 
 pub struct Camera {
@@ -21,11 +18,7 @@ pub struct Camera {
 }
 
 impl Camera {
-    pub fn new<
-        V: Into<Point3<f32>>,
-        Y: Into<Rad<f32>>,
-        P: Into<Rad<f32>>,
-    >(
+    pub fn new<V: Into<Point3<f32>>, Y: Into<Rad<f32>>, P: Into<Rad<f32>>>(
         position: V,
         yaw: Y,
         pitch: P,
@@ -41,23 +34,14 @@ impl Camera {
         let direction = self.direction();
         let up = Vector3::y();
 
-        Isometry3::look_at_rh(
-            &self.position,
-            &(self.position + direction),
-            &up,
-        ).to_homogeneous()
-
+        Isometry3::look_at_rh(&self.position, &(self.position + direction), &up).to_homogeneous()
     }
 
     pub fn direction(&self) -> Vector3<f32> {
         let (sin_pitch, cos_pitch) = self.pitch.0.sin_cos();
         let (sin_yaw, cos_yaw) = self.yaw.0.sin_cos();
 
-        Vector3::new(
-            cos_yaw * cos_pitch,
-            sin_pitch,
-            sin_yaw * cos_pitch,
-        ).normalize()
+        Vector3::new(cos_yaw * cos_pitch, sin_pitch, sin_yaw * cos_pitch).normalize()
     }
 }
 
@@ -69,9 +53,7 @@ pub struct Projection {
 }
 
 impl Projection {
-    pub fn new<
-        F: Into<Rad<f32>>,
-    >(
+    pub fn new<F: Into<Rad<f32>>>(
         width: u32,
         height: u32,
         fov_y: F,
@@ -91,7 +73,8 @@ impl Projection {
     }
 
     pub fn calc_matrix(&self) -> Matrix4<f32> {
-        OPENGL_TO_WGPU_MATRIX * Matrix4::new_perspective(self.aspect, self.fov_y.0, self.z_near, self.z_far)
+        OPENGL_TO_WGPU_MATRIX
+            * Matrix4::new_perspective(self.aspect, self.fov_y.0, self.z_near, self.z_far)
     }
 }
 
@@ -150,15 +133,16 @@ impl PlayerController {
         }
     }
 
-    pub fn update(&self, rigid_body: &mut rapier::RigidBody, direction: &mut LookDirection, delta_time: f32) {
+    pub fn update(
+        &self,
+        rigid_body: &mut rapier::RigidBody,
+        direction: &mut LookDirection,
+        delta_time: f32,
+    ) {
         let (sin_pitch, cos_pitch) = direction.pitch.as_radians().0.sin_cos();
         let (sin_yaw, cos_yaw) = direction.yaw.as_radians().0.sin_cos();
 
-        let forward = Vector3::new(
-            cos_yaw * cos_pitch,
-            sin_pitch,
-            sin_yaw * cos_pitch,
-        ).normalize();
+        let forward = Vector3::new(cos_yaw * cos_pitch, sin_pitch, sin_yaw * cos_pitch).normalize();
         let right = forward.cross(&Vector3::y_axis());
 
         if self.forward {
@@ -192,7 +176,7 @@ impl PlayerController {
 
     pub fn process_input(&mut self, event: &WindowEvent) -> bool {
         match event {
-            WindowEvent::KeyboardInput { event, ..} => {
+            WindowEvent::KeyboardInput { event, .. } => {
                 let is_pressed = event.state == winit::event::ElementState::Pressed;
 
                 match event.physical_key {
@@ -209,17 +193,14 @@ impl PlayerController {
                     _ => return false,
                 }
             }
-            WindowEvent::CursorMoved {
-                position,
-                ..
-            } => {
+            WindowEvent::CursorMoved { position, .. } => {
                 // let center = winit::dpi::PhysicalPosition::new(position.x as f64, position.y as f64);
                 // let delta = center - winit::dpi::PhysicalPosition::new(800.0, 450.0);
                 // self.look_right = delta.x as f32;
                 // self.look_up = delta.y as f32;
-                return false
+                return false;
             }
-            _ => return false
+            _ => return false,
         };
 
         true
@@ -267,7 +248,7 @@ impl FreeFlyController {
 impl CameraController for FreeFlyController {
     fn process_input(&mut self, event: &WindowEvent) -> bool {
         match event {
-            WindowEvent::KeyboardInput { event, ..} => {
+            WindowEvent::KeyboardInput { event, .. } => {
                 let is_pressed = event.state == winit::event::ElementState::Pressed;
 
                 match event.physical_key {
@@ -284,17 +265,14 @@ impl CameraController for FreeFlyController {
                     _ => return false,
                 }
             }
-            WindowEvent::CursorMoved {
-                position,
-                ..
-            } => {
+            WindowEvent::CursorMoved { position, .. } => {
                 // let center = winit::dpi::PhysicalPosition::new(position.x as f64, position.y as f64);
                 // let delta = center - winit::dpi::PhysicalPosition::new(800.0, 450.0);
                 // self.look_right = delta.x as f32;
                 // self.look_up = delta.y as f32;
-                return false
+                return false;
             }
-            _ => return false
+            _ => return false,
         };
 
         true
@@ -370,5 +348,3 @@ impl From<Deg<f32>> for Deg<f64> {
         Deg(deg.0 as f64)
     }
 }
-
-

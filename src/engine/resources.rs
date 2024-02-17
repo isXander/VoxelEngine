@@ -1,12 +1,12 @@
 use crate::engine::model::{Material, Mesh, Model, ModelVertex};
 use crate::engine::texture::{RegisteredTexture, Texture};
-use nalgebra::{Vector2, Vector3};
 use image::{GenericImage, GenericImageView};
+use nalgebra::{Vector2, Vector3};
 use std::collections::HashMap;
-use std::{fs, io};
 use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{fs, io};
 use wgpu::util::DeviceExt;
 
 pub struct ResourceManager {
@@ -48,10 +48,22 @@ impl ResourceManager {
             let file_data = fs::read(&path).expect("cant read data");
             let file_data_arr = file_data.as_slice();
 
-            if Self::TEXTURE_EXTENSIONS.iter().any(|&ext| file_name.ends_with(ext)) {
-                let texture = Self::create_bind_texture(file_data_arr, file_path_relative, device, queue, bind_group_layout);
+            if Self::TEXTURE_EXTENSIONS
+                .iter()
+                .any(|&ext| file_name.ends_with(ext))
+            {
+                let texture = Self::create_bind_texture(
+                    file_data_arr,
+                    file_path_relative,
+                    device,
+                    queue,
+                    bind_group_layout,
+                );
                 textures.insert(file_path_relative.to_str().unwrap().to_string(), texture);
-            } else if Self::MODEL_EXTENSIONS.iter().any(|&ext| file_name.ends_with(ext)) {
+            } else if Self::MODEL_EXTENSIONS
+                .iter()
+                .any(|&ext| file_name.ends_with(ext))
+            {
                 let model = Self::create_model(
                     file_data_arr,
                     file_path_relative,
@@ -61,14 +73,26 @@ impl ResourceManager {
                     bind_group_layout,
                 );
                 models.insert(file_path_relative.to_str().unwrap().to_string(), model);
-            } else if Self::ATLAS_EXTENSIONS.iter().any(|&ext| file_name.ends_with(ext)) {
+            } else if Self::ATLAS_EXTENSIONS
+                .iter()
+                .any(|&ext| file_name.ends_with(ext))
+            {
                 atlas_images.push((file_path_relative.to_str().unwrap().to_string(), file_data));
             }
         }
 
-        let texture_atlas = Arc::new(Self::stitch_textures(device, queue, bind_group_layout, atlas_images));
+        let texture_atlas = Arc::new(Self::stitch_textures(
+            device,
+            queue,
+            bind_group_layout,
+            atlas_images,
+        ));
 
-        Self { textures, models, texture_atlas }
+        Self {
+            textures,
+            models,
+            texture_atlas,
+        }
     }
 
     fn visit_dirs(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
@@ -149,29 +173,53 @@ impl ResourceManager {
             let diffuse_texture = m.diffuse_texture.map(|path| {
                 let path = root_directory.join(path);
                 let bytes = fs::read(&path).expect("Couldn't load diffuse texture");
-                Texture::from_bytes(device, queue, bytes.as_slice(), path.to_str().unwrap(), false)
-                    .unwrap()
+                Texture::from_bytes(
+                    device,
+                    queue,
+                    bytes.as_slice(),
+                    path.to_str().unwrap(),
+                    false,
+                )
+                .unwrap()
             });
 
             let normal_texture = m.normal_texture.map(|path| {
                 let path = root_directory.join(path);
                 let bytes = fs::read(&path).expect("Couldn't load normal texture");
-                Texture::from_bytes(device, queue, bytes.as_slice(), path.to_str().unwrap(), true)
-                    .unwrap()
+                Texture::from_bytes(
+                    device,
+                    queue,
+                    bytes.as_slice(),
+                    path.to_str().unwrap(),
+                    true,
+                )
+                .unwrap()
             });
 
             let ambient_texture = m.ambient_texture.map(|path| {
                 let path = root_directory.join(path);
                 let bytes = fs::read(&path).expect("Couldn't load ambient texture");
-                Texture::from_bytes(device, queue, bytes.as_slice(), path.to_str().unwrap(), false)
-                    .unwrap()
+                Texture::from_bytes(
+                    device,
+                    queue,
+                    bytes.as_slice(),
+                    path.to_str().unwrap(),
+                    false,
+                )
+                .unwrap()
             });
 
             let specular_texture = m.specular_texture.map(|path| {
                 let path = root_directory.join(path);
                 let bytes = fs::read(&path).expect("Couldn't load specular texture");
-                Texture::from_bytes(device, queue, bytes.as_slice(), path.to_str().unwrap(), false)
-                    .unwrap()
+                Texture::from_bytes(
+                    device,
+                    queue,
+                    bytes.as_slice(),
+                    path.to_str().unwrap(),
+                    false,
+                )
+                .unwrap()
             });
 
             materials.push(Material::new(
@@ -258,12 +306,18 @@ impl ResourceManager {
                     let bitangent = (delta_pos2 * delta_uv1.x - delta_pos1 * delta_uv2.x) * -r;
 
                     // We'll use the same tangent/bitangent for each vertex in the triangle
-                    vertices[c[0] as usize].tangent = (tangent + Vector3::from(vertices[c[0] as usize].tangent)).into();
-                    vertices[c[1] as usize].tangent = (tangent + Vector3::from(vertices[c[1] as usize].tangent)).into();
-                    vertices[c[2] as usize].tangent = (tangent + Vector3::from(vertices[c[2] as usize].tangent)).into();
-                    vertices[c[0] as usize].bitangent = (bitangent + Vector3::from(vertices[c[0] as usize].bitangent)).into();
-                    vertices[c[1] as usize].bitangent = (bitangent + Vector3::from(vertices[c[1] as usize].bitangent)).into();
-                    vertices[c[2] as usize].bitangent = (bitangent + Vector3::from(vertices[c[2] as usize].bitangent)).into();
+                    vertices[c[0] as usize].tangent =
+                        (tangent + Vector3::from(vertices[c[0] as usize].tangent)).into();
+                    vertices[c[1] as usize].tangent =
+                        (tangent + Vector3::from(vertices[c[1] as usize].tangent)).into();
+                    vertices[c[2] as usize].tangent =
+                        (tangent + Vector3::from(vertices[c[2] as usize].tangent)).into();
+                    vertices[c[0] as usize].bitangent =
+                        (bitangent + Vector3::from(vertices[c[0] as usize].bitangent)).into();
+                    vertices[c[1] as usize].bitangent =
+                        (bitangent + Vector3::from(vertices[c[1] as usize].bitangent)).into();
+                    vertices[c[2] as usize].bitangent =
+                        (bitangent + Vector3::from(vertices[c[2] as usize].bitangent)).into();
 
                     // Used to average the tangents/bitangents
                     triangles_included[c[0] as usize] += 1;
@@ -307,53 +361,62 @@ impl ResourceManager {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         texture_bind_group_layout: &wgpu::BindGroupLayout,
-        textures: Vec<(String, Vec<u8>)>
+        textures: Vec<(String, Vec<u8>)>,
     ) -> TextureAtlas {
-        let textures = textures.iter().map(|(name, data)| {
-            let img = image::load_from_memory(data).unwrap();
-            let rgba = img.to_rgba8();
-            let dimensions = img.dimensions();
-            if !(dimensions.0 * dimensions.1).is_power_of_two() {
-                panic!("Texture dimensions must be a power of two");
-            }
-            if dimensions.0 != dimensions.1 {
-                panic!("Texture dimensions must be square");
-            }
-            (name, rgba, dimensions)
-        }).collect::<Vec<_>>();
+        let textures = textures
+            .iter()
+            .map(|(name, data)| {
+                let img = image::load_from_memory(data).unwrap();
+                let rgba = img.to_rgba8();
+                let dimensions = img.dimensions();
+                if !(dimensions.0 * dimensions.1).is_power_of_two() {
+                    panic!("Texture dimensions must be a power of two");
+                }
+                if dimensions.0 != dimensions.1 {
+                    panic!("Texture dimensions must be square");
+                }
+                (name, rgba, dimensions)
+            })
+            .collect::<Vec<_>>();
 
-        let (largest_w, largest_h) = textures.iter().fold((0, 0), |(lw, lh), (_, _, (w, h))| {
-            (lw.max(*w), lh.max(*h))
-        });
+        let (largest_w, largest_h) = textures
+            .iter()
+            .fold((0, 0), |(lw, lh), (_, _, (w, h))| (lw.max(*w), lh.max(*h)));
 
         let ratio = largest_w as f32 / largest_h as f32;
         let cols_f32 = ((textures.len() as f32).sqrt() / ratio.sqrt()).ceil();
         let rows_f32 = (textures.len() as f32 / cols_f32).ceil();
         let cols = cols_f32 as u32;
         let rows = rows_f32 as u32;
-        
-        let mut atlas = image::RgbaImage::new(
-            largest_w * cols, 
-            largest_h * rows,
-        );
+
+        let mut atlas = image::RgbaImage::new(largest_w * cols, largest_h * rows);
         let mut cells = HashMap::new();
 
         for (i, tex) in textures.iter().enumerate() {
             let (name, img, _) = tex;
-            let (col, row) = ((i as f32 % cols_f32) as u32, (i as f32 / cols_f32).floor() as u32);
+            let (col, row) = (
+                (i as f32 % cols_f32) as u32,
+                (i as f32 / cols_f32).floor() as u32,
+            );
 
             // scale the texture to the largest texture size
-            let img = image::imageops::resize(img, largest_w, largest_h, image::imageops::FilterType::Nearest);
+            let img = image::imageops::resize(
+                img,
+                largest_w,
+                largest_h,
+                image::imageops::FilterType::Nearest,
+            );
 
             let (x, y) = (col * largest_w, row * largest_h);
             atlas.copy_from(&img, x, y).unwrap();
 
             let cell = CellPosition { x: col, y: row };
             cells.insert(name.to_string(), cell);
-        };
+        }
 
         let processed_atlas = image::DynamicImage::ImageRgba8(atlas);
-        let texture = Texture::from_image(device, queue, &processed_atlas, Some("atlas"), false).unwrap();
+        let texture =
+            Texture::from_image(device, queue, &processed_atlas, Some("atlas"), false).unwrap();
 
         let material = Material::new(
             device,
@@ -386,7 +449,6 @@ impl ResourceManager {
     pub fn get_atlas(&self) -> &Arc<TextureAtlas> {
         &self.texture_atlas
     }
-
 }
 
 pub struct TextureAtlas {
@@ -404,7 +466,7 @@ impl TextureAtlas {
         let y = cell.y as f32 * self.cell_height as f32 / self.height as f32;
         let w = self.cell_width as f32 / self.width as f32;
         let h = self.cell_height as f32 / self.height as f32;
-        
+
         (x + u * w, y + v * h)
     }
 

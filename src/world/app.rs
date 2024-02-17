@@ -1,8 +1,8 @@
+use crate::voxel::chunk::ChunkView;
+use crate::world::physics::context::{PhysicsConfig, PhysicsContext};
 use hecs::World;
 use hecs_schedule::{Schedule, ScheduleBuilder};
 use winit::event::WindowEvent;
-use crate::voxel::chunk::ChunkView;
-use crate::world::physics::context::{PhysicsConfig, PhysicsContext};
 
 pub struct Context {
     pub physics_context: PhysicsContext,
@@ -33,22 +33,36 @@ impl App {
     }
 
     pub fn run_start_stage(&mut self) {
-        self.start_schedule.execute((&mut self.world, &mut Unit))
+        self.start_schedule
+            .execute((&mut self.world, &mut Unit))
             .expect("Failed to run start schedule");
     }
 
     pub fn run_update_stage(&mut self, chunk_view: &mut ChunkView, mut delta_time: f32) {
-        self.update_schedule.execute((&mut self.world, chunk_view, &mut delta_time, &mut self.context.physics_context, &mut self.context.physics_config))
+        self.update_schedule
+            .execute((
+                &mut self.world,
+                chunk_view,
+                &mut delta_time,
+                &mut self.context.physics_context,
+                &mut self.context.physics_config,
+            ))
             .expect("Failed to run update schedule");
     }
 
     pub fn run_fixed_update_stage(&mut self) {
-        self.fixed_update_schedule.execute((&mut self.world, &mut self.context.physics_context, &mut self.context.physics_config))
+        self.fixed_update_schedule
+            .execute((
+                &mut self.world,
+                &mut self.context.physics_context,
+                &mut self.context.physics_config,
+            ))
             .expect("Failed to run fixed update schedule");
     }
 
     pub fn run_input_stage(&mut self, chunk_view: &mut ChunkView, event: &mut WindowEvent) {
-        self.input_schedule.execute((&mut self.world, chunk_view, event))
+        self.input_schedule
+            .execute((&mut self.world, chunk_view, event))
             .expect("Failed to run input schedule");
     }
 }
@@ -77,7 +91,7 @@ impl AppBuilder {
     }
 }
 
-trait Plugin {
+pub trait Plugin {
     fn inject_systems(&self, app: &mut AppBuilder);
 
     // TODO: figure out a way to inject data to the execute block / add more context to the app
