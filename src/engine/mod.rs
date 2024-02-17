@@ -26,9 +26,10 @@ use crate::engine::camera::Deg;
 use crate::voxel::chunk::{self, Chunk, ChunkManager, ChunkState, LoadedChunk};
 use crate::voxel::math::raycast;
 use crate::voxel::voxel;
+use crate::world::app::App;
+use crate::world::{app, build_app};
+use crate::world::physics::PhysicsContext;
 use crate::world::player::BoundCameraMarker;
-use crate::world::scheduler::{self, WorldScheduler};
-use crate::world::setup;
 
 // The coordinate system in Wgpu is based on DirectX and Metal's coordinate systems.
 // That means that in normalized device coordinates (opens new window),
@@ -58,7 +59,7 @@ struct State {
     light_render_pipeline: wgpu::RenderPipeline,
     resource_manager: ResourceManager,
     shader_preprocessor: shader_preprocess::ShaderPreprocessor,
-    scheduler: WorldScheduler,
+    app: App,
     projection: Projection,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
@@ -433,8 +434,9 @@ impl State {
         println!("Using {} workers for chunk manager", available_parallelism);
         let chunk_manager = ChunkManager::new(32, available_parallelism);
 
-        
-        let scheduler = WorldScheduler::new();
+        let app = build_app(app::Context {
+            physics: PhysicsContext::default(),
+        });
 
         Self {
             surface,
@@ -451,7 +453,7 @@ impl State {
             shader_preprocessor,
             render_pipeline,
             resource_manager,
-            scheduler,
+            app,
             projection,
             camera_uniform,
             camera_buffer,
@@ -477,43 +479,10 @@ impl State {
         }
     }
 
-    fn input(&mut self, event: &WindowEvent) -> bool {
-        self.scheduler.run_input_stage(event);
+    fn input(&mut self, event: &mut WindowEvent) -> bool {
+        self.app.run_input_stage(&mut self.chunk_manager.view, event);
 
-        match event {
-            WindowEvent::KeyboardInput { event, .. } if event.state == winit::event::ElementState::Pressed => {
-                match event.physical_key {
-                    Code(KeyCode::Space) => {
-                        // let raycast_result = raycast(
-                        //     &self.camera.position.coords,
-                        //     &self.camera.direction().into(),
-                        //     100.0,
-                        //     |pos| {
-                        //         self.chunk_manager.get_voxel(pos.x, pos.y, pos.z).unwrap().voxel_type != voxel::Type::Air
-                        //     }
-                        // );
-            
-                        // if let Some(raycast_result) = raycast_result {
-                        //     println!("Raycast hit: {:?}", raycast_result);
 
-                        //     self.chunk_manager.set_voxel(
-                        //         raycast_result.position.x,
-                        //         raycast_result.position.y,
-                        //         raycast_result.position.z,
-                        //         voxel::Voxel::create_default_type(voxel::Type::Air)
-                        //     ).expect("could not set voxel");
-                        //     self.chunk_manager.remesh_chunk_and_neighbours(
-                        //         raycast_result.position.x / 16, 
-                        //         raycast_result.position.z / 16, 
-                        //         self.resource_manager.get_atlas()
-                        //     );
-                        // }
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
 
         false
     }
@@ -529,9 +498,9 @@ impl State {
             self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
         }
 
-        self.scheduler.run_update_stage(&mut self.chunk_manager, delta_time);
+        self.app.run_update_stage(&mut self.chunk_manager.view, delta_time);
 
-        match self.scheduler.world.query::<(&Camera, &BoundCameraMarker)>().iter().at_most_one() {
+        match self.app.world.query::<(&Camera, &BoundCameraMarker)>().iter().at_most_one() {
             Ok(Some((id, (camera, _)))) => {
                 self.camera_uniform.update_view_proj(camera, &self.projection);
             },
@@ -596,10 +565,11 @@ impl State {
 
             render_pass.set_pipeline(&self.render_pipeline);
 
+            self.chunk_manager.update(&self.resource_manager.get_atlas());
             self.chunk_manager.receive_generated_chunks(&self.resource_manager.get_atlas());
             self.chunk_manager.upload_chunk_meshes(&self.device);
 
-            for chunk_state in self.chunk_manager.get_all_chunks() {
+            for chunk_state in self.chunk_manager.view.get_all_chunks() {
                 if let ChunkState::Loaded(LoadedChunk::Meshed { mesh, .. }) = chunk_state {
                     render_pass.draw_mesh(
                         mesh,
@@ -698,8 +668,7 @@ pub async fn run() {
     let window = Arc::new(WindowBuilder::new().build(&event_loop).expect("cant create window"));
 
     let mut state = State::new(window).await;
-    setup(&mut state.scheduler);
-    state.scheduler.run_start_stage();
+    state.app.run_start_stage();
 
     //state.window.set_cursor_grab(CursorGrabMode::Locked).expect("Could not grab cursor");
 
@@ -708,7 +677,7 @@ pub async fn run() {
     event_loop.run(move |event, event_loop_window_target| {
         match event {
             Event::WindowEvent { ref event, window_id }
-                if window_id == state.window().id() => window_event(&mut state, event, event_loop_window_target, &mut last_render_time),
+                if window_id == state.window().id() => window_event(&mut state, &mut event.clone(), event_loop_window_target, &mut last_render_time),
             _ => {}
         };
 
@@ -716,7 +685,7 @@ pub async fn run() {
     }).expect("TODO: panic message");
 }
 
-fn window_event(state: &mut State, event: &WindowEvent, event_loop_window_target: &EventLoopWindowTarget<()>, last_render_time: &mut std::time::Instant) {
+fn window_event(state: &mut State, event: &mut WindowEvent, event_loop_window_target: &EventLoopWindowTarget<()>, last_render_time: &mut std::time::Instant) {
     if state.input(event) {
         return;
     }

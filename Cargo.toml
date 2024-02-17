@@ -35,6 +35,5 @@ glob = "0.3"
 debug = true
 codegen-units = 1
 
-[profile.dev.package.rapier3d]
-[profile.dev.package.parry3d]
+[profile.dev.package."*"]
 opt-level = 3

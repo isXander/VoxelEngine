@@ -1,4 +1,4 @@
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 use crate::voxel::voxel::Face;
 use ordered_float::OrderedFloat;
 use crate::voxel::chunk::CHUNK_HEIGHT;
@@ -25,18 +25,18 @@ impl BlockPos for Vector3<i32> {
 // TODO: determine face
 #[derive(Debug)]
 pub struct CastResult {
-    pub position: Vector3<i32>,
+    pub position: Point3<i32>,
     pub face: Face,
 }
 
 pub fn raycast<Query>(
-    origin: &Vector3<f32>,
+    origin: &Point3<f32>,
     direction: &Vector3<f32>,
     length: f32,
     query: Query
 ) -> Option<CastResult>
 where
-    Query: Fn(Vector3<i32>) -> bool ,
+    Query: Fn(Point3<i32>) -> bool ,
 {
     let direction = direction.normalize();
     dbg!(direction);
@@ -51,7 +51,7 @@ where
             continue;
         }
 
-        let face = get_nearest_face(&point);
+        let face = get_nearest_face(&point.coords);
 
         if query(block_pos) {
             return Some(CastResult {

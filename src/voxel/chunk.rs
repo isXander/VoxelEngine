@@ -1,4 +1,5 @@
 use std::{collections::HashMap, sync::{mpsc::{Receiver, Sender}, Arc}, usize, vec};
+use std::collections::{HashSet, VecDeque};
 use enum_map::{enum_map, EnumMap};
 use lazy_static::lazy_static;
 use noise::{NoiseFn, Perlin};
@@ -311,7 +312,7 @@ impl VoxelFaceTextures {
 }
 
 pub struct ChunkManager {
-    chunks: HashMap<u64, ChunkState>,
+    pub view: ChunkView,
     center_chunk: (i32, i32),
     render_distance: usize,
 
@@ -326,14 +327,18 @@ pub struct ChunkManager {
 
 impl ChunkManager {
     pub fn new(render_distance: usize, workers: usize) -> Self {
-        let chunks = HashMap::new();
+        let chunks = ChunkView {
+            chunks: HashMap::new(),
+            tickets: VecDeque::new(),
+            updated_center_chunk: None,
+        };
         let thread_pool = ThreadPool::new(workers);
 
         let (chunkgen_thread_sender, chunkgen_thread_receiver) = std::sync::mpsc::channel();
         let (chunkmesh_out_sender, chunkmesh_out_receiver) = std::sync::mpsc::channel();
 
         Self {
-            chunks,
+            view: chunks,
             center_chunk: (0, 0),
             render_distance,
             thread_pool,
@@ -346,88 +351,12 @@ impl ChunkManager {
         }
     }
 
-    pub fn set_voxel(&mut self, x: i32, y: i32, z: i32, voxel: Voxel) -> Result<(), ()> {
-        let (chunk_x, chunk_z) = Self::pos_to_chunk_coords(x, z);
-
-        let chunk = match self.get_chunk_mut(chunk_x, chunk_z) {
-            Some(ChunkState::Loaded(LoadedChunk::Stored { chunk })) => chunk,
-            Some(ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. })) => chunk,
-            _ => return Err(()),
-        };
-
-        let (voxel_x, voxel_z) = Self::pos_to_voxel_coords(x, z);
-
-        if let Some(chunk) = Arc::get_mut(chunk) {
-            chunk.set_voxel(voxel_x, y as usize, voxel_z, voxel);
-        }
-        Ok(())
-    }
-
-    pub fn mod_voxel<F>(&mut self, x: i32, y: i32, z: i32, f: F) -> Result<(), ()> 
-    where 
-        F: Fn(&mut Voxel) 
-    {
-        let (chunk_x, chunk_z) = Self::pos_to_chunk_coords(x, z);
-
-        let chunk = match self.get_chunk_mut(chunk_x, chunk_z) {
-            Some(ChunkState::Loaded(LoadedChunk::Stored { chunk })) => chunk,
-            Some(ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. })) => chunk,
-            _ => return Err(()),
-        };
-
-        let (voxel_x, voxel_z) = Self::pos_to_voxel_coords(x, z);
-        
-        if let Some(chunk) = Arc::get_mut(chunk) {
-            chunk.mod_voxel(voxel_x, y as usize, voxel_z, f);
-        }
-        Ok(())
-    }
-
-    pub fn get_voxel(&self, x: i32, y: i32, z: i32) -> Result<&Voxel, ()> {
-        let (chunk_x, chunk_z) = Self::pos_to_chunk_coords(x, z);
-
-        let chunk = match self.get_chunk(chunk_x, chunk_z) {
-            Some(ChunkState::Loaded(LoadedChunk::Stored { chunk })) => chunk,
-            Some(ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. })) => chunk,
-            _ => return Err(()),
-        };
-
-        let (voxel_x, voxel_z) = Self::pos_to_voxel_coords(x, z);
-        
-        Ok(chunk.get_voxel(voxel_x, y as usize, voxel_z))
-    }
-    
-    pub fn get_voxel_mut(&mut self, x: i32, y: i32, z: i32) -> Result<&mut Voxel, ()> {
-        let (chunk_x, chunk_z) = Self::pos_to_chunk_coords(x, z);
-
-        let chunk = match self.get_chunk_mut(chunk_x, chunk_z) {
-            Some(ChunkState::Loaded(LoadedChunk::Stored { chunk })) => chunk,
-            Some(ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. })) => chunk,
-            _ => return Err(()),
-        };
-
-        let (voxel_x, voxel_z) = Self::pos_to_voxel_coords(x, z);
-        
-        match Arc::get_mut(chunk) {
-            Some(chunk) => Ok(chunk.get_voxel_mut(voxel_x, y as usize, voxel_z)),
-            None => Err(()),
-        }
-    }
-    
-    pub fn get_chunk(&self, x: i32, z: i32) -> Option<&ChunkState> {
-        self.chunks.get(&Self::pack_coordinates(x, z))
-    }
-
-    pub fn get_chunk_mut(&mut self, x: i32, z: i32) -> Option<&mut ChunkState> {
-        self.chunks.get_mut(&Self::pack_coordinates(x, z))
-    }
-
     pub fn get_center_chunk(&self) -> Option<&ChunkState> {
-        self.get_chunk(self.center_chunk.0, self.center_chunk.1)
+        self.view.get_chunk(self.center_chunk.0, self.center_chunk.1)
     }
 
     pub fn get_center_chunk_mut(&mut self) -> Option<&mut ChunkState> {
-        self.get_chunk_mut(self.center_chunk.0, self.center_chunk.1)
+        self.view.get_chunk_mut(self.center_chunk.0, self.center_chunk.1)
     }
 
     pub fn set_center_chunk(&mut self, x: i32, z: i32) {
@@ -439,35 +368,19 @@ impl ChunkManager {
 
         // completely remove chunks outside of render distance from the map
         let mut to_remove = Vec::new();
-        for coords in self.chunks.keys() {
-            let (cx, cz) = Self::unpack_coordinates(*coords);
+        for coords in self.view.chunks.keys() {
+            let (cx, cz) = unpack_coordinates(*coords);
             let distance = ((cx - x).pow(2) + (cz - z).pow(2)) as f32;
             if distance.sqrt() > self.render_distance as f32 {
                 to_remove.push(*coords);
             }
         }
         for coords in to_remove {
-            self.chunks.remove(&coords);
+            self.view.chunks.remove(&coords);
         }
 
         // load all chunks within render distance
         self.fill_map_renderdistance();
-    }
-
-    pub fn get_all_chunks(&self) -> Vec<&ChunkState> {
-        self.chunks.values().collect()
-    }
-
-    pub fn pos_to_chunk_coords(x: i32, z: i32) -> (i32, i32) {
-        (floor_div(x, CHUNK_WIDTH as i32), floor_div(z, CHUNK_WIDTH as i32))
-    }
-
-    pub fn pos_to_voxel_coords(x: i32, z: i32) -> (usize, usize) {
-        let cw = CHUNK_WIDTH as i32;
-        (
-            (((x % cw) + cw) % cw) as usize,
-            (((z % cw) + cw) % cw) as usize,
-        )
     }
 
     pub fn fill_map_renderdistance(&mut self) {
@@ -486,7 +399,7 @@ impl ChunkManager {
                     continue;
                 }
 
-                match self.chunks.get(&Self::pack_coordinates(chunk_x, chunk_z)) {
+                match self.view.get_chunk(chunk_x, chunk_z) {
                     Some(ChunkState::Loaded(_)) => continue,
                     Some(ChunkState::LoadScheduled) => continue,
                     Some(ChunkState::Loading) => continue,
@@ -494,12 +407,12 @@ impl ChunkManager {
                     None => (),
                 }
 
-                self.chunks.insert(Self::pack_coordinates(chunk_x, chunk_z), ChunkState::LoadScheduled);
+                self.view.chunks.insert(pack_coordinates(chunk_x, chunk_z), ChunkState::LoadScheduled);
 
                 let sender = self.chunkgen_thread_sender.clone();
 
                 self.thread_pool.execute(move || {
-                    sender.send((Self::pack_coordinates(chunk_x, chunk_z), ChunkState::Loading)).unwrap();
+                    sender.send((pack_coordinates(chunk_x, chunk_z), ChunkState::Loading)).unwrap();
 
                     let chunk = Chunk::new_heightmap(|vx, vz| {
                         let scale = 100.0;
@@ -513,9 +426,40 @@ impl ChunkManager {
                         },
                     );
 
-                    sender.send((Self::pack_coordinates(chunk_x, chunk_z), state)).unwrap();
+                    sender.send((pack_coordinates(chunk_x, chunk_z), state)).unwrap();
                 });
             }
+        }
+    }
+
+    pub fn update(&mut self, texture_atlas: &Arc<TextureAtlas>) {
+        match self.view.updated_center_chunk.take() {
+            Some(center_pos) => {
+                self.center_chunk = center_pos;
+                self.fill_map_renderdistance()
+            },
+            None => {}
+        }
+
+        let mut chunks_to_remesh = HashSet::new();
+
+        while !self.view.tickets.is_empty() {
+            if let Some(ticket) = self.view.tickets.pop_front() {
+                match ticket {
+                    ChunkTicket::ChunkUpdate { chunk_x, chunk_z }
+                    | ChunkTicket::VoxelUpdate { chunk_x, chunk_z, .. } => {
+                        chunks_to_remesh.insert((chunk_x, chunk_z));
+                        chunks_to_remesh.insert((chunk_x - 1, chunk_z));
+                        chunks_to_remesh.insert((chunk_x + 1, chunk_z));
+                        chunks_to_remesh.insert((chunk_x, chunk_z - 1));
+                        chunks_to_remesh.insert((chunk_x, chunk_z + 1));
+                    }
+                }
+            }
+        }
+
+        for (chunk_x, chunk_z) in chunks_to_remesh {
+            self.remesh_chunk(chunk_x, chunk_z, texture_atlas);
         }
     }
 
@@ -528,18 +472,18 @@ impl ChunkManager {
 
         // sort new chunks from closest to center to farthest, also place new chunks adjacent to eachother
         new_chunks.sort_by(|(coords_a, _), (coords_b, _)| {
-            let (ax, az) = Self::unpack_coordinates(*coords_a);
-            let (bx, bz) = Self::unpack_coordinates(*coords_b);
+            let (ax, az) = unpack_coordinates(*coords_a);
+            let (bx, bz) = unpack_coordinates(*coords_b);
             let distance_a = ((ax - self.center_chunk.0).pow(2) + (az - self.center_chunk.1).pow(2)) as f32;
             let distance_b = ((bx - self.center_chunk.0).pow(2) + (bz - self.center_chunk.1).pow(2)) as f32;
             distance_a.partial_cmp(&distance_b).unwrap()
         });
 
         for (coords, state) in new_chunks {
-            let (x, z) = Self::unpack_coordinates(coords);
+            let (x, z) = unpack_coordinates(coords);
 
-            self.chunks.insert(coords, state);
-            let state = self.chunks.get(&coords).unwrap();
+            self.view.chunks.insert(coords, state);
+            let state = self.view.chunks.get(&coords).unwrap();
 
             if let ChunkState::Loaded(LoadedChunk::Stored {..}) = state {
                 // once chunk has generated, check its neighbours if they are now able to mesh, with all 4 of their neighbours
@@ -547,7 +491,7 @@ impl ChunkManager {
                 // loop thru newly gened's neighbours
                 for (nx, nz) in [(0, 1), (0, -1), (1, 0), (-1, 0)] { // diagonal neighbours aren't needed
                     let (nx, nz) = (x + nx, z + nz);
-                    let neighbour = self.get_chunk(nx, nz);
+                    let neighbour = self.view.get_chunk(nx, nz);
 
                     if let Some(ChunkState::Loaded(LoadedChunk::Stored { chunk: neighbour_chunk })) = neighbour {
                         // we found a stored neighbour, now check if this chunk now has all 4 neighbours
@@ -555,7 +499,7 @@ impl ChunkManager {
                         let surrounding_neighbors = [(0, 1), (0, -1), (1, 0), (-1, 0)].iter()
                             .filter_map(|(nnx, nnz)| {
                                 let (nnx, nnz) = (nx + nnx, nz + nnz);
-                                let nn_state = self.get_chunk(nnx, nnz);
+                                let nn_state = self.view.get_chunk(nnx, nnz);
 
                                 match nn_state {
                                     Some(ChunkState::Loaded(LoadedChunk::Stored { chunk })) => Some(chunk),
@@ -605,7 +549,6 @@ impl ChunkManager {
         let texture_atlas = texture_atlas.clone();
 
         self.thread_pool.execute(move || {
-            let now = std::time::Instant::now();
             let mesh_data = chunk.create_mesh(
                 (chunk_x, chunk_z),
                 &neighbour_west,
@@ -614,8 +557,7 @@ impl ChunkManager {
                 &neighbour_south,
                 &texture_atlas
             );
-            println!("Mesh data: {:?}", now.elapsed().as_millis());
-            let packed = Self::pack_coordinates(chunk_x, chunk_z);
+            let packed = pack_coordinates(chunk_x, chunk_z);
 
             // create collider
             let vertex_positions = mesh_data.vertices.iter().map(|v| Point::new(v.position[0], v.position[1], v.position[2])).collect::<Vec<_>>();
@@ -628,7 +570,7 @@ impl ChunkManager {
 
     pub fn upload_chunk_meshes(&mut self, device: &wgpu::Device) {
         while let Ok((coords, mesh_data, collider)) = self.chunkmesh_out_receiver.try_recv() {
-            match self.chunks.get_mut(&coords) {
+            match self.view.chunks.get_mut(&coords) {
                 Some(chunk_state) => {
                     match chunk_state {
                         ChunkState::Loaded(LoadedChunk::Stored { chunk }) | ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. }) => {
@@ -646,22 +588,28 @@ impl ChunkManager {
         }
     }
 
-    pub fn remesh_chunk_and_neighbours(&mut self, chunk_x: i32, chunk_z: i32, texture_atlas: &Arc<TextureAtlas>) {
-        let chunk = match self.get_chunk(chunk_x, chunk_z) {
+    pub fn remesh_chunk(&mut self, chunk_x: i32, chunk_z: i32, texture_atlas: &Arc<TextureAtlas>) {
+        let chunk = match self.view.get_chunk(chunk_x, chunk_z) {
             Some(ChunkState::Loaded(LoadedChunk::Stored { chunk })) => chunk,
             Some(ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. })) => chunk,
             _ => return,
         };
 
-        let neighbours = self.get_chunk_neighbours_exists(chunk_x, chunk_z).expect("Chunk neighbours not loaded yet");
+        let neighbours = self.view.get_chunk_neighbours_exists(chunk_x, chunk_z).expect("Chunk neighbours not loaded yet");
 
         let [neighbour_west, neighbour_east, neighbour_north, neighbour_south] = neighbours;
 
         self.dispatch_chunk_mesh(
-            chunk_x, chunk_z, chunk, 
-            neighbour_west, neighbour_east, neighbour_north, neighbour_south, 
+            chunk_x, chunk_z, chunk,
+            neighbour_west, neighbour_east, neighbour_north, neighbour_south,
             texture_atlas
         );
+    }
+
+    pub fn remesh_chunk_and_neighbours(&mut self, chunk_x: i32, chunk_z: i32, texture_atlas: &Arc<TextureAtlas>) {
+        self.remesh_chunk(chunk_x, chunk_z, texture_atlas);
+
+        let neighbours = self.view.get_chunk_neighbours_exists(chunk_x, chunk_z).expect("Chunk neighbours not loaded yet");
 
         for (i, neighbour) in neighbours.iter().enumerate() {
             let (nx, nz) = match i {
@@ -672,7 +620,7 @@ impl ChunkManager {
                 _ => unreachable!(),
             };
 
-            let surrounding_neighbours = self.get_chunk_neighbours_exists(nx, nz).unwrap();
+            let surrounding_neighbours = self.view.get_chunk_neighbours_exists(nx, nz).unwrap();
             let [nn_west, nn_east, nn_north, nn_south] = surrounding_neighbours;
 
             self.dispatch_chunk_mesh(
@@ -683,8 +631,119 @@ impl ChunkManager {
             )
         }
     }
+}
 
-    fn get_chunk_neighbours(&self, chunk_x: i32, chunk_z: i32) -> [Option<&ChunkState>; 4] {
+pub fn pack_coordinates(x: i32, z: i32) -> u64 {
+    (x as u32 as u64) << 32 | (z as u32 as u64)
+}
+
+pub fn unpack_coordinates(packed: u64) -> (i32, i32) {
+    let x = (packed >> 32) as i32;
+    let z = (packed & 0xFFFFFFFF) as i32;
+    (x, z)
+}
+
+pub fn pos_to_chunk_coords(x: i32, z: i32) -> (i32, i32) {
+    (floor_div(x, CHUNK_WIDTH as i32), floor_div(z, CHUNK_WIDTH as i32))
+}
+
+pub fn pos_to_voxel_coords(x: i32, z: i32) -> (usize, usize) {
+    let cw = CHUNK_WIDTH as i32;
+    (
+        (((x % cw) + cw) % cw) as usize,
+        (((z % cw) + cw) % cw) as usize,
+    )
+}
+
+pub struct ChunkView {
+    chunks: HashMap<u64, ChunkState>,
+    tickets: VecDeque<ChunkTicket>,
+
+    pub updated_center_chunk: Option<(i32, i32)>
+}
+
+impl ChunkView {
+    pub fn mod_voxel<F>(&mut self, x: i32, y: i32, z: i32, f: F) -> Result<(), ()>
+        where
+            F: Fn(&mut Voxel)
+    {
+        let (chunk_x, chunk_z) = pos_to_chunk_coords(x, z);
+
+        let chunk = match self.get_chunk_mut(chunk_x, chunk_z) {
+            Some(ChunkState::Loaded(LoadedChunk::Stored { chunk })) => chunk,
+            Some(ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. })) => chunk,
+            _ => return Err(()),
+        };
+
+        let (voxel_x, voxel_z) = pos_to_voxel_coords(x, z);
+
+        if let Some(chunk) = Arc::get_mut(chunk) {
+            chunk.mod_voxel(voxel_x, y as usize, voxel_z, f);
+        }
+        Ok(())
+    }
+
+    pub fn get_voxel(&self, x: i32, y: i32, z: i32) -> Result<&Voxel, ()> {
+        let (chunk_x, chunk_z) = pos_to_chunk_coords(x, z);
+
+        let chunk = match self.get_chunk(chunk_x, chunk_z) {
+            Some(ChunkState::Loaded(LoadedChunk::Stored { chunk })) => chunk,
+            Some(ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. })) => chunk,
+            _ => return Err(()),
+        };
+
+        let (voxel_x, voxel_z) = pos_to_voxel_coords(x, z);
+
+        Ok(chunk.get_voxel(voxel_x, y as usize, voxel_z))
+    }
+
+    pub fn get_voxel_mut(&mut self, x: i32, y: i32, z: i32) -> Result<&mut Voxel, ()> {
+        let (chunk_x, chunk_z) = pos_to_chunk_coords(x, z);
+
+        let chunk = match self.get_chunk_mut(chunk_x, chunk_z) {
+            Some(ChunkState::Loaded(LoadedChunk::Stored { chunk })) => chunk,
+            Some(ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. })) => chunk,
+            _ => return Err(()),
+        };
+
+        let (voxel_x, voxel_z) = pos_to_voxel_coords(x, z);
+
+        match Arc::get_mut(chunk) {
+            Some(chunk) => Ok(chunk.get_voxel_mut(voxel_x, y as usize, voxel_z)),
+            None => Err(()),
+        }
+    }
+
+    pub fn set_voxel(&mut self, x: i32, y: i32, z: i32, voxel: Voxel) -> Result<(), ()> {
+        let (chunk_x, chunk_z) = pos_to_chunk_coords(x, z);
+
+        let chunk = match self.get_chunk_mut(chunk_x, chunk_z) {
+            Some(ChunkState::Loaded(LoadedChunk::Stored { chunk })) => chunk,
+            Some(ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. })) => chunk,
+            _ => return Err(()),
+        };
+
+        let (voxel_x, voxel_z) = pos_to_voxel_coords(x, z);
+
+        if let Some(chunk) = Arc::get_mut(chunk) {
+            chunk.set_voxel(voxel_x, y as usize, voxel_z, voxel);
+            self.tickets.push_back(ChunkTicket::VoxelUpdate {
+                chunk_x, chunk_z,
+                voxel_x, voxel_y: y as usize, voxel_z
+            })
+        }
+        Ok(())
+    }
+
+    pub fn get_chunk(&self, x: i32, z: i32) -> Option<&ChunkState> {
+        self.chunks.get(&pack_coordinates(x, z))
+    }
+
+    pub fn get_chunk_mut(&mut self, x: i32, z: i32) -> Option<&mut ChunkState> {
+        self.chunks.get_mut(&pack_coordinates(x, z))
+    }
+
+    pub fn get_chunk_neighbours(&self, chunk_x: i32, chunk_z: i32) -> [Option<&ChunkState>; 4] {
         [
             self.get_chunk(chunk_x - 1, chunk_z), // west
             self.get_chunk(chunk_x + 1, chunk_z), // east
@@ -693,7 +752,7 @@ impl ChunkManager {
         ]
     }
 
-    fn get_chunk_neighbours_exists(&self, chunk_x: i32, chunk_z: i32) -> Option<[&Arc<Chunk>; 4]> {
+    pub fn get_chunk_neighbours_exists(&self, chunk_x: i32, chunk_z: i32) -> Option<[&Arc<Chunk>; 4]> {
         let binding = self.get_chunk_neighbours(chunk_x, chunk_z).iter()
             .filter_map(|n| {
                 match n {
@@ -710,16 +769,11 @@ impl ChunkManager {
         }
     }
 
-    fn pack_coordinates(x: i32, z: i32) -> u64 {
-        (x as u32 as u64) << 32 | (z as u32 as u64)
-    }
-
-    fn unpack_coordinates(packed: u64) -> (i32, i32) {
-        let x = (packed >> 32) as i32;
-        let z = (packed & 0xFFFFFFFF) as i32;
-        (x, z)
+    pub fn get_all_chunks(&self) -> Vec<&ChunkState> {
+        self.chunks.values().collect()
     }
 }
+
 pub enum ChunkState {
     LoadScheduled,
     Loading,
@@ -730,4 +784,9 @@ pub enum ChunkState {
 pub enum LoadedChunk {
     Meshed { chunk: Arc<Chunk>, mesh: Mesh, collider: Collider },
     Stored { chunk: Arc<Chunk> },
+}
+
+pub enum ChunkTicket {
+    ChunkUpdate { chunk_x: i32, chunk_z: i32 },
+    VoxelUpdate { chunk_x: i32, chunk_z: i32, voxel_x: usize, voxel_y: usize, voxel_z: usize }
 }
