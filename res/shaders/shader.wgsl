@@ -133,7 +133,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let lit_result = (ambient_color + diffuse_color/* + specular_color*/) * object_color.xyz;
     var output = vec4<f32>(lit_result, object_color.a);
-    output = fog_linear_frag(output, in.fog_distance, 50.0, 250.0, vec4<f32>(0.1, 0.2, 0.3, 1.0));
+    output = fog_linear_frag(output, in.fog_distance, 50.0, 500.0, vec4<f32>(0.1, 0.2, 0.3, 1.0));
 
     return output;
 }

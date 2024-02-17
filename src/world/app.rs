@@ -2,10 +2,11 @@ use hecs::World;
 use hecs_schedule::{Schedule, ScheduleBuilder};
 use winit::event::WindowEvent;
 use crate::voxel::chunk::ChunkView;
-use crate::world::physics::PhysicsContext;
+use crate::world::physics::context::{PhysicsConfig, PhysicsContext};
 
 pub struct Context {
-    pub physics: PhysicsContext,
+    pub physics_context: PhysicsContext,
+    pub physics_config: PhysicsConfig,
 }
 
 pub struct App {
@@ -37,12 +38,12 @@ impl App {
     }
 
     pub fn run_update_stage(&mut self, chunk_view: &mut ChunkView, mut delta_time: f32) {
-        self.update_schedule.execute((&mut self.world, chunk_view, &mut delta_time, &mut self.context.physics))
+        self.update_schedule.execute((&mut self.world, chunk_view, &mut delta_time, &mut self.context.physics_context, &mut self.context.physics_config))
             .expect("Failed to run update schedule");
     }
 
     pub fn run_fixed_update_stage(&mut self) {
-        self.fixed_update_schedule.execute((&mut self.world, &mut self.context.physics))
+        self.fixed_update_schedule.execute((&mut self.world, &mut self.context.physics_context, &mut self.context.physics_config))
             .expect("Failed to run fixed update schedule");
     }
 

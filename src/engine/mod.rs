@@ -8,7 +8,7 @@ use std::mem;
 use std::path::Path;
 use std::sync::Arc;
 use itertools::Itertools;
-use nalgebra::{Matrix3, Matrix4, Point3, Quaternion, Rotation3, Unit, UnitQuaternion, Vector3};
+use nalgebra::{Matrix3, Matrix4, Point3, Quaternion, Rotation3, Unit, UnitQuaternion, vector, Vector3};
 use wgpu::{include_wgsl, PresentMode};
 use wgpu::util::DeviceExt;
 use winit::{event::*, event_loop::EventLoop, window::WindowBuilder};
@@ -28,7 +28,7 @@ use crate::voxel::math::raycast;
 use crate::voxel::voxel;
 use crate::world::app::App;
 use crate::world::{app, build_app};
-use crate::world::physics::PhysicsContext;
+use crate::world::physics::context::{PhysicsConfig, PhysicsContext};
 use crate::world::player::BoundCameraMarker;
 
 // The coordinate system in Wgpu is based on DirectX and Metal's coordinate systems.
@@ -435,7 +435,10 @@ impl State {
         let chunk_manager = ChunkManager::new(32, available_parallelism);
 
         let app = build_app(app::Context {
-            physics: PhysicsContext::default(),
+            physics_context: PhysicsContext::default(),
+            physics_config: PhysicsConfig {
+                gravity: vector![0.0, -9.81, 0.0],
+            }
         });
 
         Self {
@@ -499,6 +502,7 @@ impl State {
         }
 
         self.app.run_update_stage(&mut self.chunk_manager.view, delta_time);
+        self.app.run_fixed_update_stage(); // TODO
 
         match self.app.world.query::<(&Camera, &BoundCameraMarker)>().iter().at_most_one() {
             Ok(Some((id, (camera, _)))) => {
@@ -673,19 +677,33 @@ pub async fn run() {
     //state.window.set_cursor_grab(CursorGrabMode::Locked).expect("Could not grab cursor");
 
     let mut last_render_time = std::time::Instant::now();
+    let mut delta_times = Vec::new();
 
     event_loop.run(move |event, event_loop_window_target| {
         match event {
             Event::WindowEvent { ref event, window_id }
-                if window_id == state.window().id() => window_event(&mut state, &mut event.clone(), event_loop_window_target, &mut last_render_time),
+                if window_id == state.window().id() => window_event(&mut state, &mut event.clone(), event_loop_window_target, &mut last_render_time, &mut delta_times),
             _ => {}
         };
 
         state.window.request_redraw();
+
+        if delta_times.len() > 60 {
+            let mut sum = 0.0;
+            for t in delta_times.iter() {
+                sum += t;
+            }
+            let avg = sum / delta_times.len() as f32;
+            let fps = 1.0 / avg;
+            let title = format!("Voxel Engine | FPS: {}", fps as i32);
+            state.window.set_title(title.as_str());
+
+            delta_times.clear();
+        }
     }).expect("TODO: panic message");
 }
 
-fn window_event(state: &mut State, event: &mut WindowEvent, event_loop_window_target: &EventLoopWindowTarget<()>, last_render_time: &mut std::time::Instant) {
+fn window_event(state: &mut State, event: &mut WindowEvent, event_loop_window_target: &EventLoopWindowTarget<()>, last_render_time: &mut std::time::Instant, delta_time: &mut Vec<f32>) {
     if state.input(event) {
         return;
     }
@@ -694,6 +712,7 @@ fn window_event(state: &mut State, event: &mut WindowEvent, event_loop_window_ta
         WindowEvent::RedrawRequested => {
             let now = std::time::Instant::now();
             let dt = now.duration_since(*last_render_time).as_secs_f32();
+            delta_time.push(dt);
             *last_render_time = now;
 
             state.update(dt);

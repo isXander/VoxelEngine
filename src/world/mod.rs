@@ -21,6 +21,11 @@ pub fn build_app(context: app::Context) -> App {
         .add_system(chunk::system_chunks_focus_player)
     ;
 
+    app.fixed_update_schedule
+        .add_system(physics::systems::system_physics_step)
+        .add_system(physics::systems::systems_physics_sync_collider)
+    ;
+
     app.input_schedule
         .add_system(player::system_player_input_controller)
         .add_system(player::system_player_input_break)

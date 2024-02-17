@@ -1,5 +1,6 @@
 use hecs_schedule::{CommandBuffer, Read, SubWorld, Write};
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, vector, Vector3};
+use rapier3d::prelude::SharedShape;
 use winit::event::WindowEvent;
 use winit::keyboard::KeyCode;
 use winit::keyboard::PhysicalKey::Code;
@@ -7,6 +8,7 @@ use crate::engine::camera::{Camera, Deg, PlayerController};
 use crate::voxel::chunk::ChunkView;
 use crate::voxel::math::raycast;
 use crate::voxel::voxel;
+use crate::world::physics::components::Collider;
 
 pub struct Position(pub Point3<f32>);
 pub struct LookDirection {
@@ -30,12 +32,13 @@ pub(crate) fn system_player_spawn(mut cmd: Write<CommandBuffer>, position: Posit
         PlayerMarker,
         PlayerController::new(200.0, 8.0),
         BoundCameraMarker,
+        Collider::new(SharedShape::cuboid(1.0, 2.0, 1.0))
     ));
 }
 
 pub(crate) fn system_player_update_camera(world: SubWorld<(&Position, &LookDirection, &mut Camera)>) {
     for (_, (Position(pos), direction, camera)) in &mut world.query::<(&Position, &LookDirection, &mut Camera)>() {
-        camera.position = pos.clone();
+        camera.position = pos.clone() + vector![0.0, 1.8, 0.0]; // eye height
         camera.yaw = direction.yaw.into();
         camera.pitch = direction.pitch.into();
     }

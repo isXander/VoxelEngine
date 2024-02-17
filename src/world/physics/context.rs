@@ -1,3 +1,4 @@
+use nalgebra::Vector3;
 use rapier3d::prelude::*;
 
 pub struct PhysicsContext {
@@ -26,7 +27,23 @@ pub struct PhysicsContext {
 }
 
 impl PhysicsContext {
-    
+    pub fn step(&mut self, config: &PhysicsConfig) {
+        self.physics_pipeline.step(
+            &config.gravity,
+            &self.integration_parameters,
+            &mut self.islands,
+            &mut self.broad_phase,
+            &mut self.narrow_phase,
+            &mut self.bodies,
+            &mut self.colliders,
+            &mut self.impulse_joints,
+            &mut self.multibody_joints,
+            &mut self.ccd_solver,
+            None,
+            &(),
+            &(),
+        )
+    }
 }
 
 impl Default for PhysicsContext {
@@ -46,4 +63,8 @@ impl Default for PhysicsContext {
             event_handler: None,
         }
     }
+}
+
+pub struct PhysicsConfig {
+    pub gravity: Vector3<f32>,
 }

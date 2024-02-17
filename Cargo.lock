@@ -888,6 +888,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hecs-hierarchy"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a684e8dbc2e9b21aa6986211798095eb7da19884d863f0fd5c21a76b4f3b52a"
+dependencies = [
+ "hecs",
+ "hecs-schedule",
+ "once_cell",
+ "smallvec",
+]
+
+[[package]]
 name = "hecs-macros"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2166,6 +2178,7 @@ dependencies = [
  "fs_extra",
  "glob",
  "hecs",
+ "hecs-hierarchy",
  "hecs-schedule",
  "image",
  "itertools",

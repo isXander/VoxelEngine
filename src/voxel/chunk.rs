@@ -434,9 +434,8 @@ impl ChunkManager {
 
     pub fn update(&mut self, texture_atlas: &Arc<TextureAtlas>) {
         match self.view.updated_center_chunk.take() {
-            Some(center_pos) => {
-                self.center_chunk = center_pos;
-                self.fill_map_renderdistance()
+            Some((chunk_x, chunk_z)) => {
+                self.set_center_chunk(chunk_x, chunk_z)
             },
             None => {}
         }
@@ -579,7 +578,7 @@ impl ChunkManager {
 
                             *chunk_state = ChunkState::Loaded(LoadedChunk::Meshed { chunk: chunk.clone(), mesh, collider });
                         },
-                        _ => eprintln!("Chunk mesh upload failed, chunk not found in map"),
+                        _ => eprintln!("Chunk mesh upload failed, chunk not ready"),
                     }
                 },
                 None => eprintln!("Chunk mesh upload failed, chunk not found in map"),
