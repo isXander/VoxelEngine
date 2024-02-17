@@ -8,7 +8,8 @@ use crate::engine::camera::{Camera, Deg, PlayerController};
 use crate::voxel::chunk::ChunkView;
 use crate::voxel::math::raycast;
 use crate::voxel::voxel;
-use crate::world::physics::components::Collider;
+use crate::world::physics::components::{Collider, RapierRigidBodyHandle, RigidBody};
+use crate::world::physics::context::PhysicsContext;
 
 pub struct Position(pub Point3<f32>);
 pub struct LookDirection {
@@ -30,9 +31,10 @@ pub(crate) fn system_player_spawn(mut cmd: Write<CommandBuffer>, position: Posit
         LookDirection { yaw, pitch },
         Velocity(Vector3::identity()),
         PlayerMarker,
-        PlayerController::new(200.0, 8.0),
+        PlayerController::new(2.0, 8.0),
         BoundCameraMarker,
-        Collider::new(SharedShape::cuboid(1.0, 2.0, 1.0))
+        Collider::new(SharedShape::cuboid(1.0, 2.0, 1.0)),
+        RigidBody::Dynamic,
     ));
 }
 
@@ -44,14 +46,27 @@ pub(crate) fn system_player_update_camera(world: SubWorld<(&Position, &LookDirec
     }
 }
 
-pub(crate) fn system_player_update_controller(world: SubWorld<(&PlayerController, &mut Position, &mut LookDirection)>, delta_time: Read<f32>) {
-    for (_, (controller, position, look_direction)) in &mut world.query::<(&PlayerController, &mut Position, &mut LookDirection)>() {
-        controller.update(position, look_direction, *delta_time);
+pub(crate) fn system_player_update_position(world: SubWorld<(&RapierRigidBodyHandle, &mut Position)>, physics: Read<PhysicsContext>, delta_time: Read<f32>) {
+    for (_, (RapierRigidBodyHandle(handle), Position(pos))) in &mut world.query::<(&RapierRigidBodyHandle, &mut Position)>() {
+        let body = &physics.bodies[*handle];
+        let pos_now: Vector3<f32> = body.position().translation.vector.into();
+        let pos_next = body.next_position().translation.vector.into();
+
+        *pos = pos_now.lerp(&pos_next, *delta_time).into();
+    }
+}
+
+pub(crate) fn system_player_update_controller(world: SubWorld<(&PlayerController, &mut Position, &mut RapierRigidBodyHandle, &mut LookDirection)>, mut physics: Write<PhysicsContext>, delta_time: Read<f32>) {
+    for (_, (controller, body_handle, look_direction)) in &mut world.query::<(&PlayerController, &mut RapierRigidBodyHandle, &mut LookDirection)>() {
+        let mut body = &mut physics.bodies[body_handle.0];
+        controller.update(&mut body, look_direction, *delta_time);
+
+
     }
 }
 
 pub(crate) fn system_player_input_controller(world: SubWorld<(&mut PlayerController)>, event: Read<WindowEvent>) {
-    for (_, (controller)) in &mut world.query::<(&mut PlayerController)>() {
+    for (_, controller) in &mut world.query::<(&mut PlayerController)>() {
         controller.process_input(&event);
         
     }

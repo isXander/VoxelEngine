@@ -1,5 +1,6 @@
 use nalgebra::{Isometry3, Matrix4, Perspective3, Point3, Vector3};
 use nalgebra as na;
+use rapier3d::prelude as rapier;
 use ordered_float::Float;
 use winit::event::WindowEvent;
 use winit::keyboard::KeyCode;
@@ -149,7 +150,7 @@ impl PlayerController {
         }
     }
 
-    pub fn update(&self, position: &mut Position, direction: &mut LookDirection, delta_time: f32) {
+    pub fn update(&self, rigid_body: &mut rapier::RigidBody, direction: &mut LookDirection, delta_time: f32) {
         let (sin_pitch, cos_pitch) = direction.pitch.as_radians().0.sin_cos();
         let (sin_yaw, cos_yaw) = direction.yaw.as_radians().0.sin_cos();
 
@@ -161,16 +162,20 @@ impl PlayerController {
         let right = forward.cross(&Vector3::y_axis());
 
         if self.forward {
-            position.0 += forward * self.move_speed * delta_time;
+            rigid_body.add_force(forward * self.move_speed * delta_time, true);
+            //position.0 += forward * self.move_speed * delta_time;
         }
         if self.backward {
-            position.0 -= forward * self.move_speed * delta_time;
+            rigid_body.add_force(-forward * self.move_speed * delta_time, true);
+            //position.0 -= forward * self.move_speed * delta_time;
         }
         if self.strafe_left {
-            position.0 -= right * self.move_speed * delta_time;
+            rigid_body.add_force(-right * self.move_speed * delta_time, true);
+            //position.0 -= right * self.move_speed * delta_time;
         }
         if self.strafe_right {
-            position.0 += right * self.move_speed * delta_time;
+            rigid_body.add_force(right * self.move_speed * delta_time, true);
+            //position.0 += right * self.move_speed * delta_time;
         }
 
         let multiplier = 20.0;

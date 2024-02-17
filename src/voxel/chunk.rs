@@ -7,10 +7,11 @@ use threadpool::ThreadPool;
 
 use crate::engine;
 use std::iter::Iterator;
-use rapier3d::{geometry::{Collider, SharedShape, TriMeshFlags}, prelude::{ColliderBuilder, Point}};
+use rapier3d::{geometry::{SharedShape, TriMeshFlags}, prelude::{Point}};
 use crate::engine::model::{Mesh, MeshData};
 use crate::engine::resources::TextureAtlas;
 use crate::voxel::math::floor_div;
+use crate::world::physics::components::Collider;
 
 use super::voxel::{Voxel, Type, Face};
 
@@ -561,7 +562,7 @@ impl ChunkManager {
             // create collider
             let vertex_positions = mesh_data.vertices.iter().map(|v| Point::new(v.position[0], v.position[1], v.position[2])).collect::<Vec<_>>();
             let grouped_indices = mesh_data.indices.chunks(3).map(|c| [c[0], c[1], c[2]]).collect::<Vec<_>>();
-            let collider = ColliderBuilder::trimesh(vertex_positions, grouped_indices).build();
+            let collider = Collider { shape: SharedShape::trimesh(vertex_positions, grouped_indices) };
             
             sender.send((packed, mesh_data, collider)).unwrap();
         });

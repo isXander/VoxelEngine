@@ -483,9 +483,21 @@ impl State {
     }
 
     fn input(&mut self, event: &mut WindowEvent) -> bool {
+        match event {
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == ElementState::Pressed {
+                    match event.physical_key {
+                        Code(KeyCode::Slash) => {
+                            self.app.run_fixed_update_stage();
+                        },
+                        _ => {}
+                    }
+                }
+            },
+            _ => {}
+        }
+
         self.app.run_input_stage(&mut self.chunk_manager.view, event);
-
-
 
         false
     }
@@ -502,7 +514,6 @@ impl State {
         }
 
         self.app.run_update_stage(&mut self.chunk_manager.view, delta_time);
-        self.app.run_fixed_update_stage(); // TODO
 
         match self.app.world.query::<(&Camera, &BoundCameraMarker)>().iter().at_most_one() {
             Ok(Some((id, (camera, _)))) => {

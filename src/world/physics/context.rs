@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use hecs::Entity;
 use nalgebra::Vector3;
 use rapier3d::prelude::*;
 
@@ -24,6 +26,9 @@ pub struct PhysicsContext {
     pub integration_parameters: IntegrationParameters,
     pub physics_scale: f32,
     pub event_handler: Option<Box<dyn EventHandler>>,
+
+    pub body2entity: HashMap<RigidBodyHandle, Entity>,
+    pub collider2entity: HashMap<ColliderHandle, Entity>,
 }
 
 impl PhysicsContext {
@@ -44,6 +49,14 @@ impl PhysicsContext {
             &(),
         )
     }
+    
+    pub fn remove_collider(&mut self, handle: ColliderHandle) {
+        self.colliders.remove(handle, &mut self.islands, &mut self.bodies, true);
+    }
+    
+    pub fn remove_body(&mut self, handle: RigidBodyHandle) {
+        self.bodies.remove(handle, &mut self.islands, &mut self.colliders, &mut self.impulse_joints, &mut self.multibody_joints, true);
+    }
 }
 
 impl Default for PhysicsContext {
@@ -61,6 +74,8 @@ impl Default for PhysicsContext {
             integration_parameters: IntegrationParameters::default(),
             physics_scale: 1.0,
             event_handler: None,
+            body2entity: HashMap::new(),
+            collider2entity: HashMap::new(),
         }
     }
 }
