@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use hecs::Entity;
 use nalgebra::Vector3;
-use rapier3d::prelude::*;
+use rapier3d_f64::prelude::*;
 
 pub struct PhysicsContext {
     // Detects sleeping bodies to reduce computation
@@ -81,5 +81,5 @@ impl Default for PhysicsContext {
 }
 
 pub struct PhysicsConfig {
-    pub gravity: Vector3<f32>,
+    pub gravity: Vector3<f64>,
 }

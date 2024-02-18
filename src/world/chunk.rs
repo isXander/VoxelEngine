@@ -50,13 +50,6 @@ pub fn system_update_chunk_physics(
         } else if voxel_z > 11 {
             active_chunks.insert((chunk_x, chunk_z + 1));
         }
-
-        //debug
-        for x in -5..=5 {
-            for z in -5..=5 {
-                active_chunks.insert((chunk_x + x, chunk_z + z));
-            }
-        }
     }
 
     // remove all chunks that are not in this this
@@ -83,11 +76,7 @@ pub fn system_update_chunk_physics(
                 },
                 RigidBody::Static,
                 collider,
-                Position(Point3::new(
-                    chunk_x as f32 * 16.0,
-                    0.0,
-                    chunk_z as f32 * 16.0,
-                )),
+                // no need for a translation since the chunk mesh is already translated
             ));
         }
     }

@@ -2,16 +2,16 @@ use crate::engine::camera::{Camera, Deg, PlayerController};
 use crate::voxel::chunk::{pos_to_chunk_coords, ChunkView};
 use crate::voxel::math::raycast;
 use crate::voxel::voxel;
-use crate::world::physics::components::{Collider, RapierRigidBodyHandle, RigidBody};
+use crate::world::physics::components::{BodyDamping, CCD, Collider, ColliderMass, LockRotation, RapierRigidBodyHandle, RigidBody};
 use crate::world::physics::context::PhysicsContext;
 use hecs_schedule::{CommandBuffer, Read, SubWorld, Write};
 use nalgebra::{vector, Point3, Vector3};
-use rapier3d::prelude::SharedShape;
+use rapier3d_f64::prelude::SharedShape;
 use winit::event::WindowEvent;
 use winit::keyboard::KeyCode;
 use winit::keyboard::PhysicalKey::Code;
 
-pub struct Position(pub Point3<f32>);
+pub struct Position(pub Point3<f64>);
 pub struct LookDirection {
     pub yaw: Deg<f32>,
     pub pitch: Deg<f32>,
@@ -21,21 +21,35 @@ pub struct Velocity(pub Vector3<f32>);
 pub struct PlayerMarker;
 pub struct BoundCameraMarker;
 
-pub(crate) fn system_player_spawn(mut cmd: Write<CommandBuffer>, position: Position) {
+pub(crate) fn system_player_spawn(mut cmd: Write<CommandBuffer>, mut chunk_view: Write<ChunkView>, position: Position) {
     let yaw = Deg(90.0);
     let pitch = Deg(0.0);
 
+    let (chunk_x, chunk_z) = pos_to_chunk_coords(
+        position.0.x.floor() as i32,
+        position.0.z.floor() as i32,
+    );
+
     cmd.spawn((
-        Camera::new(position.0, yaw, pitch),
+        Camera::new(position.0.map(|x| x as f32), yaw, pitch),
         position,
         LookDirection { yaw, pitch },
         Velocity(Vector3::identity()),
         PlayerMarker,
-        PlayerController::new(2.0, 8.0),
+        PlayerController::new(5000000.0, 8.0),
         BoundCameraMarker,
-        Collider::new(SharedShape::ball(1.0)),
+        Collider::new(SharedShape::cylinder(1.0, 0.5)),
         RigidBody::Dynamic,
+        LockRotation::new(true),
+        ColliderMass(5.0),
+        BodyDamping {
+            linear: 1.0,
+            angular: 0.0,
+        },
+        CCD,
     ));
+
+    chunk_view.updated_center_chunk = Some((chunk_x, chunk_z));
 }
 
 pub(crate) fn system_player_update_camera(
@@ -44,7 +58,7 @@ pub(crate) fn system_player_update_camera(
     for (_, (Position(pos), direction, camera)) in
         &mut world.query::<(&Position, &LookDirection, &mut Camera)>()
     {
-        camera.position = pos.clone() + vector![0.0, 1.8, 0.0]; // eye height
+        camera.position = (pos.clone() + vector![0.0, 1.8, 0.0]).map(|x| x as f32); // eye height
         camera.yaw = direction.yaw.into();
         camera.pitch = direction.pitch.into();
 
@@ -52,7 +66,6 @@ pub(crate) fn system_player_update_camera(
             camera.position.x.floor() as i32,
             camera.position.z.floor() as i32,
         );
-        //println!("Ppos: {},{}", chunk_x, chunk_z);
     }
 }
 
@@ -65,10 +78,10 @@ pub(crate) fn system_player_update_position(
         &mut world.query::<(&RapierRigidBodyHandle, &mut Position)>()
     {
         let body = &physics.bodies[*handle];
-        let pos_now: Vector3<f32> = body.position().translation.vector.into();
+        let pos_now: Vector3<f64> = body.position().translation.vector.into();
         let pos_next = body.next_position().translation.vector.into();
 
-        *pos = pos_now.lerp(&pos_next, *delta_time).into();
+        *pos = pos_now.lerp(&pos_next, *delta_time as f64).into();
     }
 }
 

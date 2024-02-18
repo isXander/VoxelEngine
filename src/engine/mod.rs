@@ -4,6 +4,7 @@ pub mod resources;
 mod shader_preprocess;
 pub mod texture;
 
+use std::cmp::min;
 use crate::engine::camera::Deg;
 use camera::{Camera, CameraController, CameraUniform, FreeFlyController, Projection};
 use itertools::Itertools;
@@ -479,22 +480,7 @@ impl State {
     }
 
     fn input(&mut self, event: &mut WindowEvent) -> bool {
-        match event {
-            WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed {
-                    match event.physical_key {
-                        Code(KeyCode::Slash) => {
-                            self.app.run_fixed_update_stage();
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        self.app
-            .run_input_stage(&mut self.chunk_manager.view, event);
+        self.app.run_input_stage(&mut self.chunk_manager.view, event);
 
         false
     }
@@ -706,12 +692,13 @@ pub async fn run() {
     );
 
     let mut state = State::new(window).await;
-    state.app.run_start_stage();
+    state.app.run_start_stage(&mut state.chunk_manager.view);
 
     //state.window.set_cursor_grab(CursorGrabMode::Locked).expect("Could not grab cursor");
 
-    let mut last_render_time = std::time::Instant::now();
-    let mut delta_times = Vec::new();
+    let mut timer = Timer::new(60.0);
+    let mut prev_fps_time = std::time::Instant::now();
+    let mut frame_count = 0;
 
     event_loop
         .run(move |event, event_loop_window_target| {
@@ -723,26 +710,12 @@ pub async fn run() {
                     &mut state,
                     &mut event.clone(),
                     event_loop_window_target,
-                    &mut last_render_time,
-                    &mut delta_times,
+                    &mut timer,
+                    &mut frame_count,
+                    &mut prev_fps_time,
                 ),
                 _ => {}
             };
-
-            state.window.request_redraw();
-
-            if delta_times.len() > 60 {
-                let mut sum = 0.0;
-                for t in delta_times.iter() {
-                    sum += t;
-                }
-                let avg = sum / delta_times.len() as f32;
-                let fps = 1.0 / avg;
-                let title = format!("Voxel Engine | FPS: {}", fps as i32);
-                state.window.set_title(title.as_str());
-
-                delta_times.clear();
-            }
         })
         .expect("TODO: panic message");
 }
@@ -751,8 +724,9 @@ fn window_event(
     state: &mut State,
     event: &mut WindowEvent,
     event_loop_window_target: &EventLoopWindowTarget<()>,
-    last_render_time: &mut std::time::Instant,
-    delta_time: &mut Vec<f32>,
+    timer: &mut Timer,
+    frame_count: &mut u32,
+    prev_fps_time: &mut std::time::Instant,
 ) {
     if state.input(event) {
         return;
@@ -760,18 +734,30 @@ fn window_event(
 
     match event {
         WindowEvent::RedrawRequested => {
-            let now = std::time::Instant::now();
-            let dt = now.duration_since(*last_render_time).as_secs_f32();
-            delta_time.push(dt);
-            *last_render_time = now;
+            let fixed_update_count = timer.advance_time();
 
-            state.update(dt);
+            for _ in 0..min(fixed_update_count, 2) {
+                state.app.run_fixed_update_stage();
+            }
+
+            state.update(timer.partial_tick);
             match state.render() {
                 Ok(_) => {}
                 Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
                 Err(wgpu::SurfaceError::OutOfMemory) => event_loop_window_target.exit(),
                 Err(e) => eprintln!("{:?}", e),
             }
+
+            *frame_count += 1;
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(*prev_fps_time).as_secs_f32();
+            if elapsed > 1.0 {
+                state.window.set_title(&*format!("FPS: {}", *frame_count as f32 / elapsed));
+                *frame_count = 0;
+                *prev_fps_time = now;
+            }
+
+            state.window.request_redraw();
         }
 
         WindowEvent::CloseRequested
@@ -789,5 +775,35 @@ fn window_event(
             state.resize(*physical_size);
         }
         _ => {}
+    }
+}
+
+struct Timer {
+    partial_tick: f32,
+    tick_delta: f32,
+    target_mspt: f32,
+    last_instant: std::time::Instant,
+}
+
+impl Timer {
+    pub fn new(tps: f32) -> Self {
+        Self {
+            target_mspt: 1000.0 / tps,
+            partial_tick: 0.0,
+            tick_delta: 0.0,
+            last_instant: std::time::Instant::now(),
+        }
+    }
+
+    pub fn advance_time(&mut self) -> u32 {
+        let now = std::time::Instant::now();
+        let time = now.duration_since(self.last_instant).as_millis();
+        self.last_instant = now;
+
+        self.tick_delta = time as f32 / self.target_mspt;
+        self.partial_tick += self.tick_delta;
+        let diff = self.partial_tick as u32;
+        self.partial_tick -= diff as f32;
+        diff
     }
 }

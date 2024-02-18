@@ -2,7 +2,7 @@ use crate::world::player::{LookDirection, Position};
 use nalgebra as na;
 use nalgebra::{Isometry3, Matrix4, Perspective3, Point3, Vector3};
 use ordered_float::Float;
-use rapier3d::prelude as rapier;
+use rapier3d_f64::prelude as rapier;
 use winit::event::WindowEvent;
 use winit::keyboard::KeyCode;
 use winit::keyboard::PhysicalKey::Code;
@@ -145,24 +145,26 @@ impl PlayerController {
         let forward = Vector3::new(cos_yaw * cos_pitch, sin_pitch, sin_yaw * cos_pitch).normalize();
         let right = forward.cross(&Vector3::y_axis());
 
+        let multiplier = 0.1;
+
         if self.forward {
-            rigid_body.add_force(forward * self.move_speed * delta_time, true);
+            rigid_body.apply_torque_impulse((forward * self.move_speed * delta_time * multiplier).map(|x| x as f64), true);
             //position.0 += forward * self.move_speed * delta_time;
         }
         if self.backward {
-            rigid_body.add_force(-forward * self.move_speed * delta_time, true);
+            rigid_body.apply_torque_impulse((-forward * self.move_speed * delta_time * multiplier).map(|x| x as f64), true);
             //position.0 -= forward * self.move_speed * delta_time;
         }
         if self.strafe_left {
-            rigid_body.add_force(-right * self.move_speed * delta_time, true);
+            rigid_body.apply_torque_impulse((-right * self.move_speed * delta_time * multiplier).map(|x| x as f64), true);
             //position.0 -= right * self.move_speed * delta_time;
         }
         if self.strafe_right {
-            rigid_body.add_force(right * self.move_speed * delta_time, true);
+            rigid_body.apply_torque_impulse((right * self.move_speed * delta_time * multiplier).map(|x| x as f64), true);
             //position.0 += right * self.move_speed * delta_time;
         }
 
-        let multiplier = 20.0;
+        let multiplier = 0.25;
 
         // rotate camera when arrow keys are pressed
         direction.yaw.0 += self.look_right * self.rotate_speed * delta_time * multiplier;
@@ -171,7 +173,7 @@ impl PlayerController {
         direction.pitch.0 -= self.look_down * self.rotate_speed * delta_time * multiplier;
 
         // clamp pitch up and down
-        //direction.pitch.0 = direction.pitch.0.clamp(-1.5, 1.5);
+        direction.pitch.0 = direction.pitch.0.clamp(-90.0, 90.0);
     }
 
     pub fn process_input(&mut self, event: &WindowEvent) -> bool {

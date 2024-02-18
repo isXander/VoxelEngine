@@ -1,5 +1,6 @@
 use hecs_schedule::*;
 use nalgebra::Point3;
+use crate::voxel::chunk::ChunkView;
 use crate::world::app::App;
 
 pub mod chunk;
@@ -12,7 +13,7 @@ pub fn build_app(context: app::Context) -> App {
     let mut app = App::builder();
 
     app.start_schedule
-        .add_system(|cmd: Write<CommandBuffer>| player::system_player_spawn(cmd, player::Position(Point3::new(0.0, 70.0, 0.0))))
+        .add_system(|cmd: Write<CommandBuffer>, chunk_view: Write<ChunkView>| player::system_player_spawn(cmd, chunk_view, player::Position(Point3::new(0.0, 80.0, 0.0))))
     ;
 
     app.update_schedule

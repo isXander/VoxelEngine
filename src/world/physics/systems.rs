@@ -1,12 +1,10 @@
-use crate::world::physics::components::{
-    Collider, ColliderComponents, RapierColliderHandle, RapierRigidBodyHandle, RigidBody,
-    RigidbodyComponents,
-};
+use crate::world::physics::components::{Collider, ColliderComponents, LockPosition, LockRotation, RapierColliderHandle, RapierRigidBodyHandle, RigidBody, RigidbodyComponents};
 use crate::world::physics::context::{PhysicsConfig, PhysicsContext};
 use hecs::{Entity, World};
 use hecs_schedule::{CommandBuffer, Read, SubWorld, Write};
-use rapier3d::prelude as rapier;
+use rapier3d_f64::prelude as rapier;
 use std::collections::VecDeque;
+use rapier3d_f64::prelude::LockedAxes;
 
 pub fn system_physics_step(mut physics: Write<PhysicsContext>, config: Read<PhysicsConfig>) {
     physics.step(&config)
@@ -53,7 +51,7 @@ fn create_body(
     entity: (Entity, RigidbodyComponents),
     physics: &mut PhysicsContext,
 ) -> RapierRigidBodyHandle {
-    let (entity, (body, position)) = entity;
+    let (entity, (body, position, lock_pos, lock_rot, damping, ccd)) = entity;
 
     // found all unregistered bodies
     let mut body = match body {
@@ -65,9 +63,21 @@ fn create_body(
         body = body.position(position.0.clone().into());
     }
 
-    body = body.additional_mass(1.0);
+    let not_lock_pos = LockPosition::new(false);
+    let not_lock_rot = LockRotation::new(false);
+    let lock_pos = lock_pos.unwrap_or(&not_lock_pos);
+    let lock_rot = lock_rot.unwrap_or(&not_lock_rot);
+    body = body.locked_axes(LockedAxes::from_bits_truncate(&lock_pos.bitflags() | &lock_rot.bitflags()));
 
-    // TODO: all the diff collider option things here
+    if let Some(damping) = damping {
+        body = body
+            .linear_damping(damping.linear)
+            .angular_damping(damping.angular)
+    }
+
+    if ccd.is_some() {
+        body = body.ccd_enabled(true)
+    }
 
     let handle = physics.bodies.insert(body);
     physics.body2entity.insert(handle, entity);
@@ -80,14 +90,15 @@ fn create_collider(
     physics: &mut PhysicsContext,
     new_body: &Option<&RapierRigidBodyHandle>,
 ) -> RapierColliderHandle {
-    let (id, (collider, existing_body)) = entity;
+    let (id, (collider, mass, existing_body)) = entity;
     let body_handle = new_body.or(existing_body);
 
     // found all unregistered colliders
     let mut collider = rapier::ColliderBuilder::new(collider.shape.clone());
 
-    // TODO: all the diff collider option things here
-    collider = collider.mass(1.0);
+    if let Some(mass) = mass {
+        collider = collider.mass(mass.0);
+    }
 
     let handle = if let Some(body_handle) = body_handle {
         println!("Collider has body");
@@ -115,6 +126,7 @@ pub fn systems_physics_remove_bodies(
         .query::<&RapierRigidBodyHandle>()
         .without::<&RigidBody>()
     {
+        println!("removing");
         cmd.remove_one::<&RapierRigidBodyHandle>(entity);
         to_remove.push_back(body_handle.0);
     }
@@ -129,6 +141,7 @@ pub fn systems_physics_remove_bodies(
     }
 
     for handle in to_remove {
+        println!("removing");
         physics.remove_body(handle);
     }
 }

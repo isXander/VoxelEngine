@@ -1472,10 +1472,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "parry3d"
+name = "parry3d-f64"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13d0bdaf533851feec5cba9af11cefcc753ecefba05f758cf6abe886086bc3f5"
+checksum = "368eb8be4f9f4b6669474f092a954cb94151cc57b097b95acab3b30ed4c4164f"
 dependencies = [
  "approx",
  "arrayvec",
@@ -1670,10 +1670,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c8a99fddc9f0ba0a85884b8d14e3592853e787d581ca1816c91349b10e4eeab"
 
 [[package]]
-name = "rapier3d"
+name = "rapier3d-f64"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92d07a833e0aa3bc57010caaa50bf75fa78afc03a74207607db740da4e4579a1"
+checksum = "b8c6a3f44f255083bf89da37ffdf109f19717d936a9e2ae34108e3f994406e04"
 dependencies = [
  "approx",
  "arrayvec",
@@ -1684,7 +1684,7 @@ dependencies = [
  "nalgebra",
  "num-derive",
  "num-traits",
- "parry3d",
+ "parry3d-f64",
  "rustc-hash",
  "simba",
 ]
@@ -2189,7 +2189,7 @@ dependencies = [
  "noise",
  "ordered-float",
  "pollster",
- "rapier3d",
+ "rapier3d-f64",
  "regex",
  "threadpool",
  "tobj",

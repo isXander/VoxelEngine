@@ -17,7 +17,7 @@ use crate::engine::model::{Mesh, MeshData};
 use crate::engine::resources::TextureAtlas;
 use crate::voxel::math::floor_div;
 use crate::world::physics::components::Collider;
-use rapier3d::{
+use rapier3d_f64::{
     geometry::{SharedShape, TriMeshFlags},
     prelude::Point,
 };
@@ -134,8 +134,8 @@ impl Chunk {
         let mut indices = Vec::new();
 
         let (mut chunk_x, mut chunk_z) = chunk_pos;
-        chunk_x *= 16;
-        chunk_z *= 16;
+        chunk_x *= CHUNK_WIDTH as i32;
+        chunk_z *= CHUNK_WIDTH as i32;
 
         for x in 0..CHUNK_WIDTH {
             for y in 0..CHUNK_HEIGHT {
@@ -549,7 +549,7 @@ impl ChunkManager {
     }
 
     pub fn set_center_chunk(&mut self, x: i32, z: i32) {
-        if self.center_chunk == (x, z) {
+        if self.center_chunk == (x, z) && !self.view.chunks.is_empty() {
             return;
         }
 
@@ -615,8 +615,7 @@ impl ChunkManager {
                             ((chunk_z * CHUNK_WIDTH as i32) as f64 + vz as f64) / scale + 0.5,
                         ]) + 1.0)
                             * 40.0;
-                        noise as f32 + 1.0;
-                        40.0
+                        noise as f32 + 1.0
                     });
 
                     let state = ChunkState::Loaded(LoadedChunk::Stored {
@@ -778,7 +777,7 @@ impl ChunkManager {
             let vertex_positions = mesh_data
                 .vertices
                 .iter()
-                .map(|v| Point::new(v.position[0], v.position[1], v.position[2]))
+                .map(|v| Point::new(v.position[0] as f64, v.position[1] as f64, v.position[2] as f64))
                 .collect::<Vec<_>>();
             let grouped_indices = mesh_data
                 .indices

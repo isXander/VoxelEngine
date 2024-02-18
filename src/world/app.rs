@@ -32,9 +32,9 @@ impl App {
         }
     }
 
-    pub fn run_start_stage(&mut self) {
+    pub fn run_start_stage(&mut self, chunk_view: &mut ChunkView) {
         self.start_schedule
-            .execute((&mut self.world, &mut Unit))
+            .execute((&mut self.world, chunk_view))
             .expect("Failed to run start schedule");
     }
 
