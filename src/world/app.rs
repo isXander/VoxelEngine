@@ -3,6 +3,8 @@ use crate::world::physics::context::{PhysicsConfig, PhysicsContext};
 use hecs::World;
 use hecs_schedule::{Schedule, ScheduleBuilder};
 use winit::event::WindowEvent;
+use crate::engine::render::RenderContext;
+use crate::engine::resources::ResourceManager;
 
 pub struct Context {
     pub physics_context: PhysicsContext,
@@ -38,12 +40,12 @@ impl App {
             .expect("Failed to run start schedule");
     }
 
-    pub fn run_update_stage(&mut self, chunk_view: &mut ChunkView, mut delta_time: f32) {
+    pub fn run_update_stage(&mut self, chunk_view: &mut ChunkView, render_context: &mut RenderContext) {
         self.update_schedule
             .execute((
                 &mut self.world,
                 chunk_view,
-                &mut delta_time,
+                render_context,
                 &mut self.context.physics_context,
                 &mut self.context.physics_config,
             ))

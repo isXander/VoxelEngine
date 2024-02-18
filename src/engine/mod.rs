@@ -3,6 +3,7 @@ pub mod model;
 pub mod resources;
 mod shader_preprocess;
 pub mod texture;
+pub mod render;
 
 use std::cmp::min;
 use crate::engine::camera::Deg;
@@ -25,6 +26,7 @@ use winit::keyboard::PhysicalKey::Code;
 use winit::keyboard::{KeyCode, NamedKey};
 use winit::window::Window;
 use winit::{event::*, event_loop::EventLoop, window::WindowBuilder};
+use crate::engine::render::{PoseStack, RenderContext};
 
 use crate::voxel::chunk::{self, Chunk, ChunkManager, ChunkState, LoadedChunk};
 use crate::voxel::math::raycast;
@@ -500,9 +502,6 @@ impl State {
             );
         }
 
-        self.app
-            .run_update_stage(&mut self.chunk_manager.view, delta_time);
-
         match self
             .app
             .world
@@ -524,7 +523,7 @@ impl State {
         );
     }
 
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    fn render(&mut self, delta_tick: f32) -> Result<(), wgpu::SurfaceError> {
         // will wait for the surface to provide a new texture that we render to
         let output = self.surface.get_current_texture()?;
 
@@ -570,34 +569,34 @@ impl State {
                 timestamp_writes: None,
             });
 
-            let model = &self
-                .resource_manager
-                .get_model(&String::from("cube.obj"))
-                .unwrap();
-
+            // let model = &self
+            //     .resource_manager
+            //     .get_model(&String::from("cube.obj"))
+            //     .unwrap();
+            //
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-
-            render_pass.set_pipeline(&self.light_render_pipeline);
-            render_pass.draw_light_model(model, &self.camera_bind_group, &self.light_bind_group);
+            //
+            // render_pass.set_pipeline(&self.light_render_pipeline);
+            // render_pass.draw_light_model(model, &self.camera_bind_group, &self.light_bind_group);
 
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(2, &self.light_bind_group, &[]);
 
-            self.chunk_manager
-                .update(&self.resource_manager.get_atlas());
-            self.chunk_manager
-                .receive_generated_chunks(&self.resource_manager.get_atlas());
+            let mut pose_stack = PoseStack::new();
+
+            let mut context = RenderContext {
+                render_pass: &mut render_pass,
+                pose_stack: &mut pose_stack,
+                resource_manager: &self.resource_manager,
+                delta_tick
+            };
+
+            self.chunk_manager.update(&self.resource_manager.get_atlas());
+            self.chunk_manager.receive_generated_chunks(&self.resource_manager.get_atlas());
             self.chunk_manager.upload_chunk_meshes(&self.device);
 
-            for chunk_state in self.chunk_manager.view.get_all_chunks() {
-                if let ChunkState::Loaded(LoadedChunk::Meshed { mesh, .. }) = chunk_state {
-                    render_pass.draw_mesh(
-                        mesh,
-                        &self.resource_manager.get_atlas().material,
-                        &self.camera_bind_group,
-                        &self.light_bind_group,
-                    );
-                }
-            }
+            self.app.run_update_stage(&mut self.chunk_manager.view, &mut context);
         } // extra block tells borrower to drop any borrows, begin_render_pass borrows encoder, so to finish, we need to drop it
 
         // finish the command buffer and SEND
@@ -741,7 +740,7 @@ fn window_event(
             }
 
             state.update(timer.partial_tick);
-            match state.render() {
+            match state.render(timer.partial_tick) {
                 Ok(_) => {}
                 Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
                 Err(wgpu::SurfaceError::OutOfMemory) => event_loop_window_target.exit(),

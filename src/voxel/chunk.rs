@@ -129,18 +129,19 @@ impl Chunk {
         neighbour_north: &Chunk,
         neighbour_south: &Chunk,
         texture_atlas: &Arc<TextureAtlas>,
+        absolute_mesh: bool,
     ) -> MeshData {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
 
-        let (mut chunk_x, mut chunk_z) = chunk_pos;
-        chunk_x *= CHUNK_WIDTH as i32;
-        chunk_z *= CHUNK_WIDTH as i32;
+        let (mut cx, mut cz) = chunk_pos;
+        cx *= CHUNK_WIDTH as i32;
+        cz *= CHUNK_WIDTH as i32;
 
-        for x in 0..CHUNK_WIDTH {
-            for y in 0..CHUNK_HEIGHT {
-                for z in 0..CHUNK_WIDTH {
-                    let voxel = self.get_voxel(x, y, z);
+        for vx in 0..CHUNK_WIDTH {
+            for vy in 0..CHUNK_HEIGHT {
+                for vz in 0..CHUNK_WIDTH {
+                    let voxel = self.get_voxel(vx, vy, vz);
 
                     // skip air voxels (aka empty)
                     if voxel.voxel_type == Type::Air {
@@ -149,33 +150,33 @@ impl Chunk {
 
                     // check neighbors
                     let neighbors = [
-                        if y < CHUNK_HEIGHT - 1 {
-                            Some(self.get_voxel(x, y + 1, z))
+                        if vy < CHUNK_HEIGHT - 1 {
+                            Some(self.get_voxel(vx, vy + 1, vz))
                         } else {
                             None
                         }, // above
-                        if y > 0 {
-                            Some(self.get_voxel(x, y - 1, z))
+                        if vy > 0 {
+                            Some(self.get_voxel(vx, vy - 1, vz))
                         } else {
                             None
                         }, // below
-                        if z > 0 {
-                            Some(self.get_voxel(x, y, z - 1))
+                        if vz > 0 {
+                            Some(self.get_voxel(vx, vy, vz - 1))
                         } else {
                             None
                         }, // north
-                        if z < CHUNK_WIDTH - 1 {
-                            Some(self.get_voxel(x, y, z + 1))
+                        if vz < CHUNK_WIDTH - 1 {
+                            Some(self.get_voxel(vx, vy, vz + 1))
                         } else {
                             None
                         }, // south
-                        if x < CHUNK_WIDTH - 1 {
-                            Some(self.get_voxel(x + 1, y, z))
+                        if vx < CHUNK_WIDTH - 1 {
+                            Some(self.get_voxel(vx + 1, vy, vz))
                         } else {
                             None
                         }, // east
-                        if x > 0 {
-                            Some(self.get_voxel(x - 1, y, z))
+                        if vx > 0 {
+                            Some(self.get_voxel(vx - 1, vy, vz))
                         } else {
                             None
                         }, // west
@@ -188,11 +189,11 @@ impl Chunk {
                             // must be edge of chunk on x or z, get neighboring voxel from neighboring chunk
                             match face {
                                 Face::North => {
-                                    Some(neighbour_north.get_voxel(x, y, CHUNK_WIDTH - 1))
+                                    Some(neighbour_north.get_voxel(vx, vy, CHUNK_WIDTH - 1))
                                 }
-                                Face::South => Some(neighbour_south.get_voxel(x, y, 0)),
-                                Face::East => Some(neighbour_east.get_voxel(0, y, z)),
-                                Face::West => Some(neighbour_west.get_voxel(CHUNK_WIDTH - 1, y, z)),
+                                Face::South => Some(neighbour_south.get_voxel(vx, vy, 0)),
+                                Face::East => Some(neighbour_east.get_voxel(0, vy, vz)),
+                                Face::West => Some(neighbour_west.get_voxel(CHUNK_WIDTH - 1, vy, vz)),
                                 _ => None,
                             }
                         });
@@ -206,10 +207,12 @@ impl Chunk {
 
                         let texture = FACE_TEXTURES[voxel.voxel_type].get_texture(&face);
 
+                        let face_x = vx as f32 + if absolute_mesh { cx as f32 } else { 0.0 };
+                        let face_y = vz as f32 + if absolute_mesh { cz as f32 } else { 0.0 };
                         let (face_verts, face_indicies) = create_face(
-                            chunk_x as f32 + x as f32,
-                            y as f32,
-                            chunk_z as f32 + z as f32,
+                            face_x,
+                            vy as f32,
+                            face_y,
                             &face,
                             texture,
                             texture_atlas,
@@ -770,6 +773,7 @@ impl ChunkManager {
                 &neighbour_north,
                 &neighbour_south,
                 &texture_atlas,
+                false,
             );
             let packed = pack_coordinates(chunk_x, chunk_z);
 

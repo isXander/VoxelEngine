@@ -1,12 +1,12 @@
-use crate::voxel::chunk::{
-    pos_to_chunk_coords, pos_to_voxel_coords, ChunkManager, ChunkState, ChunkView, LoadedChunk,
-};
+use crate::voxel::chunk::{pos_to_chunk_coords, pos_to_voxel_coords, ChunkManager, ChunkState, ChunkView, LoadedChunk, CHUNK_WIDTH, CHUNK_HEIGHT};
 use crate::world::physics::components::{Collider, RigidBody};
 use crate::world::player::*;
 use hecs::World;
 use hecs_schedule::{CommandBuffer, Read, SubWorld, Write};
-use nalgebra::Point3;
+use nalgebra::{point, Point3, vector};
 use std::collections::{HashSet, VecDeque};
+use crate::engine::model::DrawModel;
+use crate::engine::render::RenderContext;
 
 pub(crate) fn system_chunks_focus_player(
     world: SubWorld<(&Position, &PlayerMarker)>,
@@ -16,6 +16,20 @@ pub(crate) fn system_chunks_focus_player(
         let (chunk_x, chunk_z) =
             pos_to_chunk_coords(position.x.floor() as i32, position.z.floor() as i32);
         chunk_view.updated_center_chunk = Some((chunk_x, chunk_z))
+    }
+}
+
+pub(crate) fn system_chunks_render(
+    mut chunk_view: Write<ChunkView>,
+    render_context: Read<RenderContext>,
+) {
+    for chunk_state in chunk_view.get_all_chunks() {
+        if let ChunkState::Loaded(LoadedChunk::Meshed { mesh, .. }) = chunk_state {
+            render_context.render_pass.draw_mesh(
+                mesh,
+                &render_context.resource_manager.get_atlas().material,
+            );
+        }
     }
 }
 
@@ -76,7 +90,13 @@ pub fn system_update_chunk_physics(
                 },
                 RigidBody::Static,
                 collider,
-                // no need for a translation since the chunk mesh is already translated
+                Position(
+                    point![
+                        chunk_x as f64 * CHUNK_WIDTH as f64,
+                        0.0,
+                        chunk_z as f64 * CHUNK_HEIGHT as f64,
+                    ]
+                )
             ));
         }
     }
