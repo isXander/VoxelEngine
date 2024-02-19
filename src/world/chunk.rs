@@ -5,8 +5,9 @@ use hecs::World;
 use hecs_schedule::{CommandBuffer, Read, SubWorld, Write};
 use nalgebra::{point, Point3, vector};
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 use crate::engine::model::DrawModel;
-use crate::engine::render::RenderContext;
+use crate::engine::render::{RenderContext, RenderQueue};
 
 pub(crate) fn system_chunks_focus_player(
     world: SubWorld<(&Position, &PlayerMarker)>,
@@ -21,14 +22,18 @@ pub(crate) fn system_chunks_focus_player(
 
 pub(crate) fn system_chunks_render(
     mut chunk_view: Write<ChunkView>,
-    render_context: Read<RenderContext>,
+    mut render_queue: Write<RenderQueue>,
 ) {
     for chunk_state in chunk_view.get_all_chunks() {
         if let ChunkState::Loaded(LoadedChunk::Meshed { mesh, .. }) = chunk_state {
-            render_context.render_pass.draw_mesh(
-                mesh,
-                &render_context.resource_manager.get_atlas().material,
-            );
+            let mesh_arc = Arc::clone(&mesh);
+
+            render_queue.push(move |ctx| {
+                ctx.render_pass.draw_mesh(
+                    &mesh_arc,
+                    &ctx.resource_manager.get_atlas().material
+                )
+            });
         }
     }
 }

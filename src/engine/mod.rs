@@ -26,7 +26,7 @@ use winit::keyboard::PhysicalKey::Code;
 use winit::keyboard::{KeyCode, NamedKey};
 use winit::window::Window;
 use winit::{event::*, event_loop::EventLoop, window::WindowBuilder};
-use crate::engine::render::{PoseStack, RenderContext};
+use crate::engine::render::{PoseStack, RenderContext, RenderQueue};
 
 use crate::voxel::chunk::{self, Chunk, ChunkManager, ChunkState, LoadedChunk};
 use crate::voxel::math::raycast;
@@ -501,6 +501,7 @@ impl State {
                 bytemuck::cast_slice(&[self.light_uniform]),
             );
         }
+        self.app.run_update_stage(&mut self.chunk_manager.view, delta_time);
 
         match self
             .app
@@ -583,20 +584,25 @@ impl State {
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             render_pass.set_bind_group(2, &self.light_bind_group, &[]);
 
-            let mut pose_stack = PoseStack::new();
-
-            let mut context = RenderContext {
-                render_pass: &mut render_pass,
-                pose_stack: &mut pose_stack,
-                resource_manager: &self.resource_manager,
-                delta_tick
-            };
-
             self.chunk_manager.update(&self.resource_manager.get_atlas());
             self.chunk_manager.receive_generated_chunks(&self.resource_manager.get_atlas());
             self.chunk_manager.upload_chunk_meshes(&self.device);
+            
+            let mut render_queue = RenderQueue::new();
 
-            self.app.run_update_stage(&mut self.chunk_manager.view, &mut context);
+            self.app.run_render_stage(&mut self.chunk_manager.view, &mut render_queue, delta_tick);
+
+            let mut context = RenderContext {
+                render_pass,
+                pose_stack: PoseStack::new(),
+                resource_manager: &self.resource_manager,
+            };
+            
+            while !render_queue.queue.is_empty() {
+                let render_event = render_queue.queue.pop_back().unwrap();
+                
+                render_event(&mut context)
+            }
         } // extra block tells borrower to drop any borrows, begin_render_pass borrows encoder, so to finish, we need to drop it
 
         // finish the command buffer and SEND

@@ -5,10 +5,26 @@ use wgpu::RenderPass;
 use crate::engine::resources::ResourceManager;
 
 pub struct RenderContext<'a> {
-    pub render_pass: &'a mut RenderPass<'a>,
-    pub pose_stack: &'a mut PoseStack,
+    pub render_pass: RenderPass<'a>,
+    pub pose_stack: PoseStack,
     pub resource_manager: &'a ResourceManager,
-    pub delta_tick: f32,
+}
+
+pub struct RenderQueue<'a> {
+    pub queue: VecDeque<Box<dyn Fn(&'a mut RenderContext)>>
+}
+
+impl<'a> RenderQueue<'a> {
+    pub fn new() -> Self {
+        Self {
+            queue: VecDeque::new()
+        }
+    }
+
+    pub fn push<T: 'static>(&mut self, renderer: T)
+    where T: Fn(&'a mut RenderContext) {
+        self.queue.push_back(Box::new(renderer))
+    }
 }
 
 pub struct PoseStack {

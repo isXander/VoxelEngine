@@ -3,8 +3,7 @@ use crate::world::physics::context::{PhysicsConfig, PhysicsContext};
 use hecs::World;
 use hecs_schedule::{Schedule, ScheduleBuilder};
 use winit::event::WindowEvent;
-use crate::engine::render::RenderContext;
-use crate::engine::resources::ResourceManager;
+use crate::engine::render::{RenderContext, RenderQueue};
 
 pub struct Context {
     pub physics_context: PhysicsContext,
@@ -18,6 +17,7 @@ pub struct App {
 
     pub start_schedule: Schedule,
     pub update_schedule: Schedule,
+    pub render_schedule: Schedule,
     pub fixed_update_schedule: Schedule,
     pub input_schedule: Schedule,
 }
@@ -29,6 +29,7 @@ impl App {
         AppBuilder {
             start_schedule: Schedule::builder(),
             update_schedule: Schedule::builder(),
+            render_schedule: Schedule::builder(),
             fixed_update_schedule: Schedule::builder(),
             input_schedule: Schedule::builder(),
         }
@@ -40,16 +41,28 @@ impl App {
             .expect("Failed to run start schedule");
     }
 
-    pub fn run_update_stage(&mut self, chunk_view: &mut ChunkView, render_context: &mut RenderContext) {
+    pub fn run_update_stage(&mut self, chunk_view: &mut ChunkView, mut delta_time: f32) {
         self.update_schedule
             .execute((
                 &mut self.world,
                 chunk_view,
-                render_context,
+                &mut delta_time,
                 &mut self.context.physics_context,
                 &mut self.context.physics_config,
             ))
             .expect("Failed to run update schedule");
+    }
+
+    pub fn run_render_stage(&mut self, chunk_view: &mut ChunkView, render_queue: &mut RenderQueue, mut delta_tick: f32) {
+
+        // self.render_schedule
+        //     .execute_seq((
+        //         &mut self.world,
+        //         chunk_view,
+        //         render_queue,
+        //         &mut delta_tick,
+        //     ))
+        //     .expect("Failed to run render schedule");
     }
 
     pub fn run_fixed_update_stage(&mut self) {
@@ -72,6 +85,7 @@ impl App {
 pub struct AppBuilder {
     pub start_schedule: ScheduleBuilder,
     pub update_schedule: ScheduleBuilder,
+    pub render_schedule: ScheduleBuilder,
     pub fixed_update_schedule: ScheduleBuilder,
     pub input_schedule: ScheduleBuilder,
 }
@@ -87,6 +101,7 @@ impl AppBuilder {
             context,
             start_schedule: self.start_schedule.build(),
             update_schedule: self.update_schedule.build(),
+            render_schedule: self.render_schedule.build(),
             fixed_update_schedule: self.fixed_update_schedule.build(),
             input_schedule: self.input_schedule.build(),
         }

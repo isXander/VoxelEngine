@@ -20,7 +20,7 @@ pub fn build_app(context: app::Context) -> App {
         .add_system(player::system_player_update_controller)
         .add_system(player::system_player_update_camera)
         .add_system(chunk::system_chunks_focus_player)
-        .add_system(chunk::system_chunks_render)
+        //.add_system(chunk::system_chunks_render)
         .add_system(chunk::system_update_chunk_physics)
         .add_system(player::system_player_update_position)
     ;

@@ -804,7 +804,7 @@ impl ChunkManager {
                         ChunkState::Loaded(LoadedChunk::Stored { chunk })
                         | ChunkState::Loaded(LoadedChunk::Meshed { chunk, .. }) => {
                             // actually upload the mesh to the buffer on the main thread
-                            let mesh = Mesh::from_data(device, "Chunk Mesh", &mesh_data, 0);
+                            let mesh = Arc::new(Mesh::from_data(device, "Chunk Mesh", &mesh_data, 0));
 
                             *chunk_state = ChunkState::Loaded(LoadedChunk::Meshed {
                                 chunk: chunk.clone(),
@@ -1047,7 +1047,7 @@ pub enum ChunkState {
 pub enum LoadedChunk {
     Meshed {
         chunk: Arc<Chunk>,
-        mesh: Mesh,
+        mesh: Arc<Mesh>,
         collider: Collider,
     },
     Stored {
