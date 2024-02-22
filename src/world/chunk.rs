@@ -7,7 +7,6 @@ use nalgebra::{point, Point3, vector};
 use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use crate::engine::model::DrawModel;
-use crate::engine::render::{RenderContext, RenderQueue};
 
 pub(crate) fn system_chunks_focus_player(
     world: SubWorld<(&Position, &PlayerMarker)>,
@@ -17,24 +16,6 @@ pub(crate) fn system_chunks_focus_player(
         let (chunk_x, chunk_z) =
             pos_to_chunk_coords(position.x.floor() as i32, position.z.floor() as i32);
         chunk_view.updated_center_chunk = Some((chunk_x, chunk_z))
-    }
-}
-
-pub(crate) fn system_chunks_render(
-    mut chunk_view: Write<ChunkView>,
-    mut render_queue: Write<RenderQueue>,
-) {
-    for chunk_state in chunk_view.get_all_chunks() {
-        if let ChunkState::Loaded(LoadedChunk::Meshed { mesh, .. }) = chunk_state {
-            let mesh_arc = Arc::clone(&mesh);
-
-            render_queue.push(move |ctx| {
-                ctx.render_pass.draw_mesh(
-                    &mesh_arc,
-                    &ctx.resource_manager.get_atlas().material
-                )
-            });
-        }
     }
 }
 

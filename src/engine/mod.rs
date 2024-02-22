@@ -26,9 +26,9 @@ use winit::keyboard::PhysicalKey::Code;
 use winit::keyboard::{KeyCode, NamedKey};
 use winit::window::Window;
 use winit::{event::*, event_loop::EventLoop, window::WindowBuilder};
-use crate::engine::render::{PoseStack, RenderContext, RenderQueue};
+use crate::engine::render::{PoseStack, RenderContext};
 
-use crate::voxel::chunk::{self, Chunk, ChunkManager, ChunkState, LoadedChunk};
+use crate::voxel::chunk::{self, Chunk, CHUNK_WIDTH, ChunkManager, ChunkState, LoadedChunk};
 use crate::voxel::math::raycast;
 use crate::voxel::voxel;
 use crate::world::app::App;
@@ -581,28 +581,49 @@ impl State {
             // render_pass.draw_light_model(model, &self.camera_bind_group, &self.light_bind_group);
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-            render_pass.set_bind_group(2, &self.light_bind_group, &[]);
 
             self.chunk_manager.update(&self.resource_manager.get_atlas());
             self.chunk_manager.receive_generated_chunks(&self.resource_manager.get_atlas());
             self.chunk_manager.upload_chunk_meshes(&self.device);
-            
-            let mut render_queue = RenderQueue::new();
 
-            self.app.run_render_stage(&mut self.chunk_manager.view, &mut render_queue, delta_tick);
+            let mut pose_stack = PoseStack::new();
 
-            let mut context = RenderContext {
-                render_pass,
-                pose_stack: PoseStack::new(),
-                resource_manager: &self.resource_manager,
-            };
-            
-            while !render_queue.queue.is_empty() {
-                let render_event = render_queue.queue.pop_back().unwrap();
-                
-                render_event(&mut context)
+            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(2, &self.light_bind_group, &[]);
+
+            if let Ok(Some((_, (camera, _)))) = self.app.world.query::<(&Camera, &BoundCameraMarker)>().iter().at_most_one() {
+                pose_stack.push();
+                pose_stack.last_mut().pose = camera.calc_matrix();
+                // pose_stack.rotate(UnitQuaternion::from_axis_angle(&Vector3::x_axis(), camera.pitch.0));
+                // pose_stack.rotate(UnitQuaternion::from_axis_angle(&Vector3::y_axis(), camera.yaw.0 + std::f32::consts::PI));
+                // pose_stack.translate(camera.position.x, camera.position.y, camera.position.z);
+
+                for ((chunk_x, chunk_z), chunk) in self.chunk_manager.view.get_all_chunks_pos() {
+                    if let ChunkState::Loaded(LoadedChunk::Meshed { mesh, .. }) = chunk {
+                        pose_stack.push();
+
+                        //pose_stack.translate(5.0, 0.0, 0.0);
+                        pose_stack.translate(chunk_x as f32 * CHUNK_WIDTH as f32 - camera.position.x, 0.0, chunk_z as f32 * CHUNK_WIDTH as f32 - camera.position.z);
+                        pose_stack.apply_stack(&mut self.camera_uniform, &self.projection);
+                        self.queue.write_buffer(
+                            &self.camera_buffer,
+                            0,
+                            bytemuck::cast_slice(&[self.camera_uniform]),
+                        );
+
+                        render_pass.draw_mesh(
+                            mesh,
+                            &self.resource_manager.get_atlas().material
+                        );
+
+                        pose_stack.pop();
+                    }
+                }
+
+                pose_stack.pop();
             }
+
+
         } // extra block tells borrower to drop any borrows, begin_render_pass borrows encoder, so to finish, we need to drop it
 
         // finish the command buffer and SEND

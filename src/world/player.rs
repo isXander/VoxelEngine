@@ -19,6 +19,7 @@ pub struct LookDirection {
 pub struct Velocity(pub Vector3<f32>);
 
 pub struct PlayerMarker;
+#[derive(Debug)]
 pub struct BoundCameraMarker;
 
 pub(crate) fn system_player_spawn(mut cmd: Write<CommandBuffer>, mut chunk_view: Write<ChunkView>, position: Position) {

@@ -1,30 +1,15 @@
 use std::arch::x86_64::__m128;
 use std::collections::VecDeque;
-use nalgebra::{Matrix3, Matrix4};
+use nalgebra::{Matrix3, Matrix4, Quaternion, UnitQuaternion};
+use nalgebra_glm::translate;
 use wgpu::RenderPass;
+use crate::engine::camera::{Camera, CameraUniform, Projection};
 use crate::engine::resources::ResourceManager;
 
 pub struct RenderContext<'a> {
-    pub render_pass: RenderPass<'a>,
-    pub pose_stack: PoseStack,
+    pub render_pass: &'a mut RenderPass<'a>,
+    pub pose_stack: &'a mut PoseStack,
     pub resource_manager: &'a ResourceManager,
-}
-
-pub struct RenderQueue<'a> {
-    pub queue: VecDeque<Box<dyn Fn(&'a mut RenderContext)>>
-}
-
-impl<'a> RenderQueue<'a> {
-    pub fn new() -> Self {
-        Self {
-            queue: VecDeque::new()
-        }
-    }
-
-    pub fn push<T: 'static>(&mut self, renderer: T)
-    where T: Fn(&'a mut RenderContext) {
-        self.queue.push_back(Box::new(renderer))
-    }
 }
 
 pub struct PoseStack {
@@ -40,7 +25,7 @@ impl PoseStack {
         });
 
         Self {
-            stack: VecDeque::new()
+            stack
         }
     }
 
@@ -83,6 +68,12 @@ impl PoseStack {
         }
     }
 
+    pub fn rotate(&mut self, quaternion: UnitQuaternion<f32>) {
+        let pose = self.last_mut();
+        pose.pose *= Matrix4::from(quaternion);
+        pose.normal *= Matrix3::from(quaternion);
+    }
+
     pub fn set_identity(&mut self) {
         let last = self.last_mut();
         last.pose.fill_with_identity();
@@ -96,6 +87,10 @@ impl PoseStack {
     pub fn last_mut(&mut self) -> &mut Pose {
         self.stack.back_mut().unwrap()
     }
+
+    pub fn apply_stack(&self, camera_uniform: &mut CameraUniform, projection: &Projection) {
+        camera_uniform.update_view_proj_with_view(projection, &self.last().pose)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -105,10 +100,11 @@ pub struct Pose {
 }
 
 fn translate_mat4(m: &mut Matrix4<f32>, x: f32, y: f32, z: f32) {
-    m.m41 = m.m11 * x + (m.m21 * y + (m.m31 * z + m.m41));
-    m.m42 = m.m12 * x + (m.m22 * y + (m.m32 * z + m.m42));
-    m.m43 = m.m13 * x + (m.m23 * y + (m.m34 * z + m.m43));
-    m.m44 = m.m14 * x + (m.m24 * y + (m.m34 * z + m.m44));
+    *m = translate(m, &nalgebra::Vector3::new(x, y, z));
+    // m.m41 = m.m11 * x + (m.m21 * y + (m.m31 * z + m.m41));
+    // m.m42 = m.m12 * x + (m.m22 * y + (m.m32 * z + m.m42));
+    // m.m43 = m.m13 * x + (m.m23 * y + (m.m33 * z + m.m43));
+    // m.m44 = m.m14 * x + (m.m24 * y + (m.m34 * z + m.m44));
 }
 
 fn scale_mat4(mat: &mut Matrix4<f32>, x: f32, y: f32, z: f32) {

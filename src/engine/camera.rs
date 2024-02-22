@@ -81,24 +81,30 @@ impl Projection {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CameraUniform {
-    view_position: [f32; 4],
-    view_proj: [[f32; 4]; 4],
+    //view_position: [f32; 4],
+    proj_matrix: [[f32; 4]; 4],
     view_matrix: [[f32; 4]; 4],
 }
 
 impl CameraUniform {
     pub fn new() -> Self {
         Self {
-            view_position: [0.0; 4],
-            view_proj: Matrix4::identity().into(),
+            //view_position: [0.0; 4],
+            proj_matrix: Matrix4::identity().into(),
             view_matrix: Matrix4::identity().into(),
         }
     }
 
     pub fn update_view_proj(&mut self, camera: &Camera, projection: &Projection) {
-        self.view_position = camera.position.coords.push(1.0).into();
+        // self.view_position = camera.position.coords.push(1.0).into();
         self.view_matrix = camera.calc_matrix().into();
-        self.view_proj = (projection.calc_matrix() * camera.calc_matrix()).into();
+        self.proj_matrix = projection.calc_matrix().into();
+    }
+
+    pub fn update_view_proj_with_view(&mut self, projection: &Projection, view: &Matrix4<f32>) {
+        // self.view_position = camera.position.coords.push(1.0).into();
+        self.view_matrix = view.clone().into();
+        self.proj_matrix = projection.calc_matrix().into()
     }
 }
 

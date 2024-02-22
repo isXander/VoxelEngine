@@ -1035,6 +1035,10 @@ impl ChunkView {
     pub fn get_all_chunks(&self) -> Vec<&ChunkState> {
         self.chunks.values().collect()
     }
+
+    pub fn get_all_chunks_pos(&self) -> Vec<((i32, i32), &ChunkState)> {
+        self.chunks.iter().map(|(k, v)| (unpack_coordinates(*k), v)).collect()
+    }
 }
 
 pub enum ChunkState {
